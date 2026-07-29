@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, firefox } from 'playwright';
-import { config, browserFor } from './config.js';
+import { config } from './config.js';
 import { makeLogger } from './logger.js';
 
 const log = makeLogger('browser');
@@ -9,6 +9,34 @@ const log = makeLogger('browser');
 // Tout sauf firefox passe par le moteur Chromium (« chrome » = vrai Google
 // Chrome, sélectionné via l'option channel).
 const engine = (browser) => (browser === 'firefox' ? firefox : chromium);
+
+// Google Chrome n'est distribué qu'en x86-64 : sur ARM (Raspberry Pi, Apple
+// Silicon, aarch64 en général) il n'est pas installable. On retombe donc sur le
+// Chromium fourni par Playwright, qui existe pour les deux architectures.
+const CHROME_PATHS = [
+  '/opt/google/chrome/chrome',
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+];
+
+let chromeAvailable = null;
+async function hasChrome() {
+  if (chromeAvailable !== null) return chromeAvailable;
+  chromeAvailable = false;
+  for (const bin of CHROME_PATHS) {
+    try {
+      await fs.access(bin);
+      chromeAvailable = true;
+      break;
+    } catch {
+      /* binaire suivant */
+    }
+  }
+  if (!chromeAvailable) {
+    log.info(`Google Chrome absent (${process.arch}) — utilisation du Chromium de Playwright`);
+  }
+  return chromeAvailable;
+}
 
 /**
  * Un profil est lié à son moteur : si on change de navigateur pour un store,
@@ -107,7 +135,7 @@ export async function withContext(provider, fn, opts = {}) {
 
 /** Lance le contexte persistant (appelant responsable du close()). */
 export async function launchContext(provider, { headless = config.headless } = {}) {
-  const browser = browserFor(provider);
+  const browser = config.browser;
   const profileDir = path.join(config.profilesDir, provider);
   await ensureProfileEngine(profileDir, browser);
 
@@ -132,10 +160,9 @@ export async function launchContext(provider, { headless = config.headless } = {
   };
 
   if (isChromium) {
-    // Le vrai Google Chrome (channel) est bien moins challengé que le Chromium
-    // livré avec Playwright : marques « Google Chrome », codecs propriétaires,
-    // Widevine — autant de signaux que Cloudflare regarde.
-    if (browser === 'chrome') opts.channel = 'chrome';
+    // Chrome de marque quand il est là (fingerprint plus banal : marques
+    // « Google Chrome », codecs propriétaires, Widevine), Chromium sinon.
+    if (browser === 'chrome' && (await hasChrome())) opts.channel = 'chrome';
 
     // En headless seulement : l'UA annonce « HeadlessChrome ». On le nettoie,
     // mais uniquement là, car un UA forcé en mode headed diverge des client

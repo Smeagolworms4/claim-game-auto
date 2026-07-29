@@ -14,6 +14,22 @@ export default {
   homeUrl: 'https://www.gog.com/',
 
   async isLoggedIn(page) {
+    // C'est l'endpoint qu'utilise le header de GOG : réponse binaire et fiable,
+    // là où un sélecteur DOM dépend d'une refonte du site.
+    try {
+      const res = await page.request.get('https://menu.gog.com/v1/account/basic', { timeout: 15000 });
+      if (res.ok()) {
+        const body = await res.json();
+        if (typeof body?.isLoggedIn === 'boolean') {
+          if (body.username) log.debug('compte GOG:', body.username);
+          return body.isLoggedIn;
+        }
+      }
+      log.warn(`API compte GOG inattendue (HTTP ${res.status()}), repli sur le DOM`);
+    } catch (err) {
+      log.warn('API compte GOG injoignable:', err.message);
+    }
+
     await page.goto(HOME, { waitUntil: 'domcontentloaded' });
     await sleep(2000);
     return page.locator('#menuUsername').first().isVisible({ timeout: 5000 }).catch(() => false);

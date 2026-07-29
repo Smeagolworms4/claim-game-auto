@@ -1,4 +1,4 @@
-import { config, browserFor } from '../config.js';
+import { config } from '../config.js';
 import { makeLogger } from '../logger.js';
 import { clickFirst, waitAny, sleep } from '../browser.js';
 
@@ -51,10 +51,9 @@ export default {
     // dans le doute on répond « non connecté » plutôt que de lancer des claims
     // qui échoueront.
     if (await isChallenge(page)) {
-      log.warn(
-        'challenge Cloudflare sur la page compte — session non vérifiable' +
-          (browserFor('epic') === 'firefox' ? '' : ' (BROWSER_EPIC=firefox passe ce contrôle)'),
-      );
+      // Challenge intermittent, lié à la réputation de l'IP : réessayer plus
+      // tard suffit souvent, sinon il faut importer les cookies.
+      log.warn('challenge Cloudflare sur la page compte — session non vérifiable, réessai au prochain passage');
       return false;
     }
     // On exige d'avoir atterri sur la page compte : en cas d'échec réseau,
@@ -137,7 +136,20 @@ export default {
     });
 
     const cta = page.locator('button[data-testid="purchase-cta-button"]').first();
-    await cta.waitFor({ state: 'visible', timeout: 25000 });
+    try {
+      await cta.waitFor({ state: 'visible', timeout: 25000 });
+    } catch (err) {
+      // Le plus souvent ce n'est pas la page qui a changé : c'est un Turnstile
+      // Cloudflare devant. On le nomme, pour déclencher une demande de
+      // déblocage plutôt qu'une erreur opaque.
+      if (await isChallenge(page)) {
+        return {
+          status: 'captcha',
+          message: 'Turnstile Cloudflare sur la page du jeu',
+        };
+      }
+      throw err;
+    }
     const label = ((await cta.textContent()) || '').trim().toLowerCase();
     log.debug(offer.title, '→ CTA:', label);
 

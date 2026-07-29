@@ -3,7 +3,7 @@ import net from 'node:net';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { config, browserFor, applySettings, snapshot, forcedSettings } from '../config.js';
+import { config, applySettings, snapshot, forcedSettings } from '../config.js';
 import { makeLogger, recentLogs, logEvents } from '../logger.js';
 import { runAll, detectAll, redeemPendingKeys, events as runnerEvents } from '../runner.js';
 import { providers, allNames, capabilities } from '../providers/index.js';
@@ -77,14 +77,15 @@ async function handleApi(req, res, url) {
           name: n,
           label: providers[n]?.label || n,
           capabilities: capabilities(n),
-          browser: browserFor(n),
           detected: lastDetection.byProvider[n] || null,
         })),
         available: allNames,
         pendingKeys: (await state.keys({ pendingOnly: true })).length,
         detectionAt: lastDetection.at,
         stats: st,
-        schedule: { cron: config.cron, timezone: config.timezone },
+        schedule: { cron: config.cron, cronDetect: config.cronDetect, timezone: config.timezone },
+        browser: config.browser,
+        attention: await attention.pending(),
         login: loginSession.status(),
         vnc: vnc.status(),
         dryRun: config.dryRun,
@@ -102,7 +103,7 @@ async function handleApi(req, res, url) {
       // réglage fantôme resterait en base sans effet.
       const forced = forcedSettings();
       await state.saveSettings(
-        Object.fromEntries(Object.entries(applied).filter(([k]) => !forced[k] || k === 'browserPerProvider')),
+        Object.fromEntries(Object.entries(applied).filter(([k]) => !forced[k])),
       );
       // Le cron n'est relu qu'au (re)démarrage du job : on reprogramme.
       if (`${applied.cron}|${applied.cronDetect}` !== before) {
@@ -250,7 +251,7 @@ async function handleUnlock(res, token, action) {
     try {
       const active = loginSession.status();
       if (!active.active || active.provider !== entry.provider) {
-        await loginSession.start(entry.provider);
+        await loginSession.start(entry.provider, { url: entry.url });
       }
       return json(res, 200, { provider: entry.provider, label, reason: entry.reason });
     } catch (err) {

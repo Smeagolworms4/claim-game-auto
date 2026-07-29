@@ -52,9 +52,25 @@ Le mode **Simulation** (réglages, ou `DRY_RUN=true`) détecte sans rien valider
 ### Sans Docker
 
 ```bash
-npm install && npx playwright install chrome firefox
+npm install && npx playwright install chromium
 node src/index.js daemon
 ```
+
+### Architectures
+
+L'image fonctionne en **amd64** et en **arm64** (Raspberry Pi, Apple Silicon, addon Home
+Assistant `aarch64`) : Chromium est disponible pour les deux, d'où son choix par défaut.
+
+Google Chrome, lui, n'est publié qu'en amd64. Si tu veux l'utiliser malgré tout — son
+empreinte est un peu plus banale pour les protections anti-bot — construis l'image avec :
+
+```bash
+docker compose build --build-arg INSTALL_CHROME=true
+# puis BROWSER=chrome dans .env, ou le réglage correspondant dans l'interface
+```
+
+Le code vérifie la présence du binaire au lancement et retombe silencieusement sur
+Chromium s'il est absent, donc la même image reste utilisable partout.
 
 ## Configuration
 
@@ -69,8 +85,7 @@ Tout se passe dans `.env` (voir `.env.example`). Les réglages qui comptent :
 | `SLACK_WEBHOOK`, `WEBHOOK_URL`, `FREEMOBILE_USER`/`_PASS` | vide | Autres canaux |
 | `PROVIDERS` | `epic,steam,gog,prime` | Stores actifs |
 | `COUNTRY` / `LOCALE` | `FR` / `fr-FR` | Pays du store (prix et offres en dépendent) |
-| `BROWSER` | `chrome` | `chrome` (vrai Google Chrome), `chromium` (celui de Playwright) ou `firefox` |
-| `BROWSER_<STORE>` | `BROWSER_EPIC=firefox` | Moteur par store — voir *Dépannage* |
+| `BROWSER` | `chromium` | `chromium` (amd64 + arm64), `chrome` (amd64, image construite avec `INSTALL_CHROME=true`) ou `firefox` |
 | `HEADLESS` | `true` | Runs planifiés sans affichage |
 | `DRY_RUN` | `false` | Détecte sans réclamer |
 | `WEB_USER` / `WEB_PASSWORD` | vide | Auth basique sur l'interface |
@@ -81,10 +96,9 @@ Tout se passe dans `.env` (voir `.env.example`). Les réglages qui comptent :
 | `STEAM_EXTRA_SUBIDS` | vide | Packages Steam à activer en plus |
 | `DISCORD_WEBHOOK`, `TELEGRAM_*`, `NTFY_TOPIC` | vide | Notifications |
 
-> **Le profil est lié au moteur** : changer le navigateur d'un store efface son profil
-> (le tool le détecte et prévient dans le journal) et impose de refaire la connexion.
-> Chaque store ayant son propre profil, on peut sans problème mélanger les moteurs —
-> c'est d'ailleurs le réglage par défaut : Chrome partout, Firefox pour Epic.
+> **Un seul navigateur pour tous les stores** : Chromium. Passer de `chromium` à `chrome`
+> conserve les sessions (même famille de profil) ; passer à `firefox`, non — les profils
+> sont effacés et il faut refaire les connexions.
 
 ## Réglages : interface d'abord, `.env` en secours
 
@@ -202,18 +216,14 @@ Amazon — il n'y a pas de claim Luna séparé.
 Symptôme : dans le VNC, la case « Vérifiez que vous êtes humain » se relance
 indéfiniment et on ne peut pas se connecter.
 
-C'est ce qu'**Epic** fait subir à Chrome et Chromium, en headless **comme** en headed,
-même avec le vrai Google Chrome et un fingerprint propre (`brands: Google Chrome`,
-`navigator.webdriver = false`, sans `--enable-automation`). **Firefox passe la même
-page sans challenge** — d'où le défaut `BROWSER_EPIC=firefox`.
+**Le challenge est intermittent** : sur la même page Epic, à quelques heures
+d'intervalle, Chrome et Firefox ont tous deux été bloqués puis tous deux passés. Ce
+n'est donc pas le moteur qui décide — c'est la réputation de l'IP au moment de la
+requête. Changer de navigateur peut débloquer sur le coup, mais ne règle rien de
+façon durable.
 
-Si un autre store se met à boucler, bascule-le :
-
-```bash
-# dans .env
-BROWSER_GOG=firefox
-```
-puis `docker compose up -d` et refais la connexion de ce store.
+En pratique : **réessayer plus tard** suffit souvent (le profil conserve son
+`cf_clearance` une fois obtenu), et l'**import de cookies** règle le cas définitivement.
 
 Si *tous* les stores bouclent, y compris dans ton navigateur habituel sur la même
 machine, le problème est ton **adresse IP** (VPN, IP d'hébergeur, plage réputée) et non

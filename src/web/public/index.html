@@ -33,8 +33,11 @@
             :prepend-icon="status.busy ? 'mdi-progress-clock' : 'mdi-check-circle-outline'">
       {{ status.busy ? busyLabel : 'inactif' }}
     </v-chip>
-    <v-chip size="small" variant="tonal" class="mr-4" prepend-icon="mdi-gamepad-variant-outline">
+    <v-chip size="small" variant="tonal" class="mr-2" prepend-icon="mdi-gamepad-variant-outline">
       {{ status.stats ? status.stats.total : 0 }} réclamé(s)
+    </v-chip>
+    <v-chip size="small" variant="tonal" class="mr-4" prepend-icon="mdi-google-chrome">
+      {{ status.browser || '—' }}
     </v-chip>
 
     <v-btn variant="tonal" class="mr-2" prepend-icon="mdi-magnify"
@@ -49,6 +52,23 @@
     <v-progress-linear v-if="status.busy" indeterminate color="primary"></v-progress-linear>
 
     <v-container fluid>
+      <!-- Interventions en attente : captcha, session expirée, action manuelle -->
+      <v-alert v-for="a in (status.attention || [])" :key="a.token" type="warning"
+               variant="tonal" border="start" class="mb-4" icon="mdi-lock-alert-outline">
+        <div class="d-flex align-center flex-wrap ga-3">
+          <div>
+            <strong>{{ (providerLabel(a.provider) || a.provider) }}</strong> —
+            {{ reasonLabel(a.reason) }}
+            <span v-if="a.details" class="text-medium-emphasis"> · {{ a.details }}</span>
+          </div>
+          <v-spacer></v-spacer>
+          <v-btn color="warning" variant="flat" size="small" prepend-icon="mdi-monitor-lock"
+                 :disabled="status.busy" @click="unlock(a)">Débloquer dans le VNC</v-btn>
+          <v-btn variant="text" size="small" :href="'/unlock/' + a.token" target="_blank"
+                 prepend-icon="mdi-open-in-new">Lien</v-btn>
+        </div>
+      </v-alert>
+
       <v-row>
         <v-col v-for="p in status.providers" :key="p.name" cols="12" md="6" lg="3">
           <v-card border>
@@ -57,7 +77,6 @@
                 <v-icon :icon="icons[p.name] || 'mdi-controller'" size="small"></v-icon>
                 <span class="text-subtitle-1">{{ p.label }}</span>
                 <v-spacer></v-spacer>
-                <v-chip size="x-small" variant="text" class="text-medium-emphasis">{{ p.browser }}</v-chip>
                 <v-chip size="x-small" variant="tonal" :color="loginColor(p)">{{ loginLabel(p) }}</v-chip>
               </v-card-title>
             </v-card-item>
@@ -283,17 +302,6 @@
             variant="outlined" density="compact" hide-details></v-text-field></v-col>
         </v-row>
 
-        <div class="text-overline mt-4 mb-1">Navigateur par store</div>
-        <v-row dense>
-          <v-col v-for="n in (setAvailable || [])" :key="n" cols="6" md="3">
-            <v-select :model-value="set.browserPerProvider[n] || ''" :items="browserChoices"
-                      :label="n" variant="outlined" density="compact"
-                      :disabled="!!browserForced(n)"
-                      :hint="browserForced(n) ? 'Verrouillé : imposé par ' + browserForced(n) : ''"
-                      persistent-hint
-                      @update:model-value="v => set.browserPerProvider[n] = v"></v-select>
-          </v-col>
-        </v-row>
 
         <div class="text-overline mt-4 mb-1">Divers</div>
         <v-row dense>
@@ -307,6 +315,10 @@
           <v-col cols="12" md="6"><v-text-field v-model="set.legacyEmail" :disabled="isForced('legacyEmail')" :hint="forcedHint('legacyEmail')" persistent-hint label="E-mail Legacy Games"
             variant="outlined" density="compact" hide-details></v-text-field></v-col>
         </v-row>
+        <v-switch v-model="set.headless" color="primary" density="compact"
+                  :disabled="isForced('headless')"
+                  :hint="forcedHint('headless') || 'Décoché = navigateur affiché dans le Xvfb : moins de captchas'"
+                  persistent-hint label="Exécuter les runs en headless"></v-switch>
         <v-switch v-model="set.dryRun" color="primary" density="compact" :disabled="isForced('dryRun')" :hint="forcedHint('dryRun')" persistent-hint
                   label="Simulation (ne rien réclamer)"></v-switch>
         <v-switch v-model="set.autoRedeemKeys" color="primary" density="compact" :disabled="isForced('autoRedeemKeys')" :hint="forcedHint('autoRedeemKeys')" persistent-hint
@@ -365,7 +377,7 @@ const app = Vue.createApp({
     autoScroll: true,
     setOpen: false,
     setBusy: false,
-    set: { browserPerProvider: {}, notifyEvents: [] },
+    set: { notifyEvents: [] },
     setAvailable: [],
     setForced: {},
     notifyKinds: [
@@ -374,18 +386,13 @@ const app = Vue.createApp({
       { key: 'captcha', label: 'Demande de captcha (lien de déblocage)' },
       { key: 'available', label: 'Liste des jeux disponibles' },
     ],
-    browserChoices: [
-      { title: 'défaut', value: '' },
-      { title: 'chrome', value: 'chrome' },
-      { title: 'chromium', value: 'chromium' },
-      { title: 'firefox', value: 'firefox' },
-    ],
     cookieOpen: false,
     cookieProvider: {},
     cookieText: '',
     cookieBusy: false,
     vncOpen: false,
     vncLabel: '',
+    unlockToken: null,
     vncSrc: '',
     finishing: false,
     snack: { show: false, text: '', color: 'info' },
@@ -466,34 +473,41 @@ const app = Vue.createApp({
       return env ? `Verrouillé : imposé par ${env} dans .env` : '';
     },
 
-    browserForced(provider) {
-      return (this.setForced.browserPerProvider || {})[provider] || '';
-    },
-
     async openSettings() {
       const r = await api('/api/settings');
       this.setForced = r.forced || {};
-      this.set = {
-        ...r.settings,
-        browserPerProvider: { ...(r.settings.browserPerProvider || {}) },
-        notifyEvents: [...(r.settings.notifyEvents || [])],
-      };
+      this.set = { ...r.settings, notifyEvents: [...(r.settings.notifyEvents || [])] };
       this.setAvailable = r.available || [];
       this.setOpen = true;
     },
 
     async saveSettings() {
       this.setBusy = true;
-      // Un moteur vide = « défaut » : on ne l'enregistre pas.
-      const browsers = Object.fromEntries(
-        Object.entries(this.set.browserPerProvider).filter(([, v]) => v),
-      );
-      const r = await api('/api/settings', { ...this.set, browserPerProvider: browsers });
+      const r = await api('/api/settings', this.set);
       this.setBusy = false;
       if (r.error) return this.toast(r.error, 'error');
       this.setOpen = false;
       this.toast('Réglages enregistrés.', 'success');
       this.refresh();
+    },
+
+    providerLabel(name) {
+      return (this.status.providers || []).find((p) => p.name === name)?.label || name;
+    },
+
+    reasonLabel: (reason) => ({
+      captcha: 'un captcha bloque la navigation',
+      'login-required': 'session expirée, reconnexion nécessaire',
+      manual: 'action manuelle nécessaire',
+    }[reason] || reason),
+
+    // Ouvre la modale VNC pilotée par le jeton : « C'est débloqué » relance
+    // ensuite le claim de ce store.
+    async unlock(a) {
+      const r = await api(`/api/unlock/${a.token}/start`, {});
+      if (r.error) return this.toast(r.error, 'error');
+      this.unlockToken = a.token;
+      this.openVnc(r.label || a.provider);
     },
 
     openCookies(p) {
@@ -550,7 +564,10 @@ const app = Vue.createApp({
       // noVNC est proxifié par ce serveur : même origine, même port.
       this.vncSrc = '/vnc/vnc.html?autoconnect=1&resize=scale&reconnect=1';
       this.vncOpen = true;
-      this.keepAlive = setInterval(() => api('/api/login/keepalive', {}), 60000);
+      this.keepAlive = setInterval(
+        () => api(this.unlockToken ? `/api/unlock/${this.unlockToken}/keepalive` : '/api/login/keepalive', {}),
+        60000,
+      );
     },
 
     closeVnc() {
@@ -561,12 +578,17 @@ const app = Vue.createApp({
 
     async finishLogin() {
       this.finishing = true;
-      const r = await api('/api/login/finish', {});
+      const token = this.unlockToken;
+      const r = await api(token ? `/api/unlock/${token}/finish` : '/api/login/finish', {});
       this.finishing = false;
+      this.unlockToken = null;
       this.closeVnc();
       this.toast(
-        r.loggedIn ? `Connecté à ${r.provider} — VNC coupé, retour en headless.`
-                   : `Toujours pas connecté à ${r.provider}, réessaie.`,
+        r.loggedIn
+          ? token
+            ? `${r.provider} débloqué — le claim repart automatiquement.`
+            : `Connecté à ${r.provider} — VNC coupé.`
+          : `${r.provider} toujours pas reconnu, réessaie.`,
         r.loggedIn ? 'success' : 'warning',
       );
       this.refresh();

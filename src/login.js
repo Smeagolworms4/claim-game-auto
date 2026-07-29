@@ -25,7 +25,7 @@ export function status() {
   };
 }
 
-export async function start(name) {
+export async function start(name, { url = null } = {}) {
   const provider = getProvider(name);
   if (!provider) throw new Error(`provider inconnu: ${name}`);
   if (session) throw new Error(`session déjà ouverte pour ${session.provider}`);
@@ -35,7 +35,10 @@ export async function start(name) {
     await vnc.start();
     const context = await launchContext(name, { headless: false });
     const page = await newPage(context);
-    await page.goto(provider.loginUrl, { waitUntil: 'domcontentloaded' }).catch((err) => {
+    // Sur un déblocage, on atterrit là où ça a coincé : résoudre le Turnstile
+    // sur cette page dépose le cookie cf_clearance dans le profil, ce qui
+    // débloque aussi les passages headless suivants.
+    await page.goto(url || provider.loginUrl, { waitUntil: 'domcontentloaded' }).catch((err) => {
       log.warn('navigation login:', err.message);
     });
 

@@ -107,7 +107,12 @@ async function runProvider(name, { claim = true } = {}) {
             }
             if (['captcha', 'manual'].includes(res.status)) {
               await attention
-                .request(name, res.status, `${offer.title}${res.message ? ` — ${res.message}` : ''}`)
+                .request(
+                  name,
+                  res.status,
+                  `${offer.title}${res.message ? ` — ${res.message}` : ''}`,
+                  offer.url,
+                )
                 .catch((err) => plog.warn(err.message));
             }
           }

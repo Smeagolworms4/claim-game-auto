@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { config } from './config.js';
 import { makeLogger } from './logger.js';
-import { notify } from './notify.js';
+import { notifyEvent } from './notify.js';
 import * as state from './state.js';
 
 const log = makeLogger('attention');
@@ -57,7 +57,7 @@ export const urlFor = (token) =>
  * Crée (ou réutilise) une demande pour un store et notifie l'utilisateur.
  * Une seule demande active par store, pour ne pas spammer à chaque run.
  */
-export async function request(provider, reason, details = '') {
+export async function request(provider, reason, details = '', url = null) {
   const existing = (await pending()).find((r) => r.provider === provider);
   if (existing) {
     log.debug(`demande déjà en attente pour ${provider}`);
@@ -65,13 +65,14 @@ export async function request(provider, reason, details = '') {
   }
 
   const token = randomBytes(16).toString('hex');
-  const entry = { provider, reason, details, at: new Date().toISOString(), resolvedAt: null };
+  const entry = { provider, reason, details, url, at: new Date().toISOString(), resolvedAt: null };
   await state.saveAttention(token, entry);
 
   const why = REASONS[reason] || reason;
   log.warn(`intervention requise sur ${provider} : ${why}`);
 
-  await notify(
+  await notifyEvent(
+    'captcha',
     `🔓 ${provider} — intervention requise`,
     [
       `${why}${details ? ` (${details})` : ''}`,

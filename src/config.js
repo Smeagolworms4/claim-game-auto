@@ -34,12 +34,16 @@ export const config = {
   timezone: process.env.TZ || 'Europe/Paris',
   runOnStart: bool(process.env.RUN_ON_START, false),
 
-  // Navigateur par défaut : 'chrome' (vrai Google Chrome), 'chromium' (celui de
-  // Playwright) ou 'firefox'.
-  browser: (process.env.BROWSER || 'chrome').toLowerCase(),
-  // Runs planifiés : headless. Le mode "headed" (dans le Xvfb, visible en VNC)
-  // n'est utilisé que pour les sessions de login manuelles.
-  headless: bool(process.env.HEADLESS, true),
+  // Chromium partout : c'est le seul moteur disponible à la fois en amd64 et en
+  // arm64, donc le comportement est identique quelle que soit la machine.
+  // 'chrome' (amd64 uniquement, image construite avec INSTALL_CHROME=true) et
+  // 'firefox' restent acceptés comme échappatoire globale.
+  browser: (process.env.BROWSER || 'chromium').toLowerCase(),
+  // Les runs tournent "headed" dans le Xvfb du conteneur : invisible depuis
+  // l'hôte, mais c'est ce qui passe le mieux les protections anti-bot (un
+  // Chromium headless se fait servir un Turnstile beaucoup plus souvent).
+  // Mettre HEADLESS=true économise un peu de RAM, au prix de plus de captchas.
+  headless: bool(process.env.HEADLESS, false),
   display: process.env.DISPLAY || ':99',
   // Résolution de l'écran virtuel, partagée avec l'entrypoint (Xvfb).
   screen: process.env.SCREEN_SIZE || '1600,1000',
@@ -101,9 +105,6 @@ export const config = {
   notifyOnNothing: bool(process.env.NOTIFY_ON_NOTHING, false),
 
   logLevel: (process.env.LOG_LEVEL || 'info').toLowerCase(),
-
-  // Moteur par store, surchargeable depuis l'interface.
-  browserPerProvider: {},
 };
 
 /**
@@ -112,11 +113,11 @@ export const config = {
  * évite de redémarrer le conteneur pour changer un webhook.
  */
 export const EDITABLE = [
-  'cron', 'cronDetect', 'dryRun', 'notifyOnNothing', 'primeClaimLoot', 'autoRedeemKeys',
+  'cron', 'cronDetect', 'dryRun', 'headless', 'notifyOnNothing', 'primeClaimLoot', 'autoRedeemKeys',
   'publicUrl', 'legacyEmail', 'notifyEvents',
   'discordWebhook', 'slackWebhook', 'telegramToken', 'telegramChatId',
   'ntfyTopic', 'ntfyServer', 'webhookUrl', 'webhookMethod', 'webhookTemplate',
-  'freeMobileUser', 'freeMobilePass', 'browserPerProvider',
+  'freeMobileUser', 'freeMobilePass',
 ];
 
 // Correspondance réglage → variable d'environnement. Une variable non vide dans
@@ -125,6 +126,7 @@ export const EDITABLE = [
 export const ENV_KEYS = {
   cron: 'CRON_SCHEDULE',
   cronDetect: 'DETECT_SCHEDULE',
+  headless: 'HEADLESS',
   dryRun: 'DRY_RUN',
   notifyOnNothing: 'NOTIFY_ON_NOTHING',
   primeClaimLoot: 'PRIME_CLAIM_LOOT',
@@ -156,11 +158,6 @@ export function forcedSettings() {
   for (const [key, env] of Object.entries(ENV_KEYS)) {
     if (isSet(env)) forced[key] = env;
   }
-  const perProvider = {};
-  for (const p of Object.keys(PROVIDER_ENV)) {
-    if (isSet(PROVIDER_ENV[p])) perProvider[p] = PROVIDER_ENV[p];
-  }
-  if (Object.keys(perProvider).length) forced.browserPerProvider = perProvider;
   return forced;
 }
 
@@ -169,14 +166,7 @@ export function applySettings(patch = {}) {
   for (const [k, v] of Object.entries(patch)) {
     if (!EDITABLE.includes(k) || v === undefined) continue;
     // .env a le dernier mot sur ce qu'il définit explicitement.
-    if (forced[k] && k !== 'browserPerProvider') continue;
-    if (k === 'browserPerProvider') {
-      const locked = forced.browserPerProvider || {};
-      config.browserPerProvider = Object.fromEntries(
-        Object.entries(v || {}).filter(([provider]) => !locked[provider]),
-      );
-      continue;
-    }
+    if (forced[k]) continue;
     config[k] = k === 'publicUrl' ? String(v).replace(/\/$/, '') : v;
   }
   return snapshot();
@@ -186,22 +176,3 @@ export function snapshot() {
   return Object.fromEntries(EDITABLE.map((k) => [k, config[k]]));
 }
 
-// Epic sert un Turnstile Cloudflare en boucle à Chrome/Chromium (constaté en
-// headless comme en headed) là où Firefox passe. Chaque store ayant son propre
-// profil, on peut mélanger les moteurs. Surchargeable par store :
-// BROWSER_EPIC, BROWSER_STEAM, BROWSER_GOG, BROWSER_PRIME.
-const BROWSER_DEFAULTS = { epic: 'firefox' };
-
-// Variable d'environnement dédiée à chaque store.
-const PROVIDER_ENV = Object.fromEntries(
-  ['epic', 'steam', 'gog', 'prime', 'legacy'].map((p) => [p, `BROWSER_${p.toUpperCase()}`]),
-);
-
-export const browserFor = (provider) => {
-  const chosen =
-    config.browserPerProvider?.[provider] ||
-    process.env[`BROWSER_${String(provider).toUpperCase().replace(/[^A-Z0-9]/g, '_')}`] ||
-    BROWSER_DEFAULTS[provider] ||
-    config.browser;
-  return String(chosen).toLowerCase();
-};
