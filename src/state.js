@@ -61,6 +61,14 @@ export async function markClaimed(provider, id, meta = {}) {
   await save();
 }
 
+export async function unmarkClaimed(provider, id) {
+  const s = await load();
+  if (!s.claimed[key(provider, id)]) return false;
+  delete s.claimed[key(provider, id)];
+  await save();
+  return true;
+}
+
 export async function setLastRun(summary) {
   const s = await load();
   s.lastRun = { at: new Date().toISOString(), ...summary };
@@ -71,21 +79,26 @@ export async function setLastRun(summary) {
 // Les offres Prime/Luna donnent souvent une clé à activer sur un store
 // partenaire (GOG, Legacy Games, Epic, Microsoft). On les garde ici pour
 // pouvoir réessayer et ne jamais perdre un code.
-export async function addKey({ code, target, title, from = 'prime', url = null }) {
+export async function addKey({ code, target, title, from = 'prime', url = null, redeemUrl = null }) {
   if (!code) return null;
   const s = await load();
   if (!s.keys) s.keys = {};
   if (!s.keys[code]) {
-    s.keys[code] = { code, target, title, from, url, at: new Date().toISOString(), status: 'pending' };
+    s.keys[code] = { code, target, title, from, url, redeemUrl, at: new Date().toISOString(), status: 'pending' };
     await save();
   }
   return s.keys[code];
 }
 
+// Statuts qui méritent une nouvelle tentative. « unknown » en fait partie :
+// sinon une activation qui a échoué pour une raison transitoire (page pas
+// chargée, bouton manqué, session à rafraîchir) restait bloquée pour toujours.
+const RETRYABLE = new Set(['pending', 'unknown', 'captcha', 'error']);
+
 export async function keys({ pendingOnly = false } = {}) {
   const s = await load();
   const list = Object.values(s.keys || {});
-  return (pendingOnly ? list.filter((k) => k.status === 'pending') : list).sort((a, b) =>
+  return (pendingOnly ? list.filter((k) => RETRYABLE.has(k.status)) : list).sort((a, b) =>
     b.at.localeCompare(a.at),
   );
 }

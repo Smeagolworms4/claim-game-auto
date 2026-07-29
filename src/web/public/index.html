@@ -117,6 +117,9 @@
                   <v-btn v-if="!o.claimedBefore" size="x-small" variant="text" class="ml-1"
                          icon="mdi-check-circle-outline" title="Marquer comme déjà réclamé"
                          @click.stop.prevent="markClaimed(p, o)"></v-btn>
+                  <v-btn v-else size="x-small" variant="text" class="ml-1"
+                         icon="mdi-undo-variant" title="Marquer comme non réclamé (sera retenté)"
+                         @click.stop.prevent="unmarkClaimed(p, o)"></v-btn>
                 </template>
               </v-list-item>
             </v-list>
@@ -148,13 +151,29 @@
                 <v-chip size="x-small" variant="tonal">{{ item.target || 'inconnu' }}</v-chip>
               </template>
               <template #item.code="{ item }">
-                <code>{{ item.code }}</code>
+                <v-chip size="small" variant="outlined" class="font-monospace">{{ item.code }}</v-chip>
                 <v-btn size="x-small" variant="text" icon="mdi-content-copy" class="ml-1"
                        title="Copier la clé" @click="copy(item.code)"></v-btn>
-                <v-btn v-if="redeemUrl(item.target, item.code)" size="x-small" variant="tonal"
-                       class="ml-1" :href="redeemUrl(item.target, item.code)" target="_blank"
+                <v-btn v-if="item.redeemUrl || redeemUrl(item.target, item.code)" size="x-small"
+                       variant="tonal" class="ml-1" target="_blank"
+                       :href="item.redeemUrl || redeemUrl(item.target, item.code)"
                        prepend-icon="mdi-key-arrow-right">Activer</v-btn>
               </template>
+              <template #item.link="{ item }">
+                <template v-if="item.redeemUrl || redeemUrl(item.target, item.code)">
+                  <a :href="item.redeemUrl || redeemUrl(item.target, item.code)" target="_blank"
+                     class="text-primary text-caption">
+                    {{ shortUrl(item.redeemUrl || redeemUrl(item.target, item.code)) }}
+                  </a>
+                  <v-btn size="x-small" variant="text" icon="mdi-content-copy" class="ml-1"
+                         title="Copier le lien"
+                         @click="copy(item.redeemUrl || redeemUrl(item.target, item.code))"></v-btn>
+                </template>
+                <span v-else class="text-medium-emphasis text-caption">
+                  activation non automatisée
+                </span>
+              </template>
+
               <template #item.status="{ item }">
                 <v-chip size="x-small" variant="tonal" :color="keyColor(item.status)">
                   {{ item.status }}
@@ -344,6 +363,9 @@
                   label="Notifier même sans nouveauté"></v-switch>
       </v-card-text>
       <v-card-actions>
+        <!-- Test de la chaîne de notification, avec le lien vers l'interface -->
+        <v-btn variant="tonal" prepend-icon="mdi-bell-ring-outline" :loading="testing"
+               @click="testNotify()">Tester les notifications</v-btn>
         <v-spacer></v-spacer>
         <v-btn variant="text" @click="setOpen = false">Annuler</v-btn>
         <v-btn color="primary" variant="flat" :loading="setBusy" @click="saveSettings()">Enregistrer</v-btn>
@@ -384,14 +406,15 @@ const app = Vue.createApp({
     keys: [],
     keyHeaders: [
       { title: 'Jeu', key: 'title' },
-      { title: 'Source', key: 'from' },
       { title: 'À activer sur', key: 'target' },
       { title: 'Clé', key: 'code' },
+      { title: 'Lien d\'activation', key: 'link', sortable: false },
       { title: 'État', key: 'status' },
     ],
     autoScroll: true,
     setOpen: false,
     setBusy: false,
+    testing: false,
     set: { notifyEvents: [] },
     setAvailable: [],
     setForced: {},
@@ -481,10 +504,22 @@ const app = Vue.createApp({
       }[target] || null;
     },
 
+    // Un lien d'activation complet déborde de la colonne : on garde l'hôte et
+    // la fin, la copie donne l'URL entière.
+    shortUrl(url) {
+      try {
+        const u = new URL(url);
+        const tail = u.pathname.split('/').filter(Boolean).pop() || '';
+        return `${u.host}/…/${tail}`.replace('/…/', tail ? '/…/' : '');
+      } catch {
+        return url;
+      }
+    },
+
     async copy(text) {
       try {
         await navigator.clipboard.writeText(text);
-        this.toast('Clé copiée.');
+        this.toast('Copié dans le presse-papiers.');
       } catch {
         this.toast('Copie impossible — sélectionne la clé à la main.', 'warning');
       }
@@ -505,6 +540,21 @@ const app = Vue.createApp({
       this.set = { ...r.settings, notifyEvents: [...(r.settings.notifyEvents || [])] };
       this.setAvailable = r.available || [];
       this.setOpen = true;
+    },
+
+    // Envoie une notif de test sur tous les canaux configurés, avec le lien
+    // de l'interface : vérifie aussi que PUBLIC_URL est correct.
+    async testNotify() {
+      this.testing = true;
+      const r = await api('/api/notify/test', {});
+      this.testing = false;
+      if (r.error) return this.toast(r.error, 'error');
+      this.toast(
+        r.sent?.length
+          ? `Notification envoyée sur : ${r.sent.join(', ')}`
+          : 'Aucun canal configuré — renseigne au moins un webhook.',
+        r.sent?.length ? 'success' : 'warning',
+      );
     },
 
     async saveSettings() {
@@ -536,6 +586,14 @@ const app = Vue.createApp({
       this.toast(`« ${o.title} » marqué comme réclamé.`, 'success');
       this.refresh();
       this.loadHistory();
+    },
+
+    // Corrige un faux « possédé » : l'offre redevient candidate.
+    async unmarkClaimed(p, o) {
+      const r = await api('/api/unclaimed', { provider: p.name, id: o.id });
+      if (r.error) return this.toast(r.error, 'error');
+      this.toast(`« ${o.title} » sera retenté au prochain claim.`, 'info');
+      this.refresh();
     },
 
     async stop() {
@@ -660,6 +718,11 @@ const app = Vue.createApp({
 
     const es = new EventSource('/api/events');
     es.addEventListener('log', (e) => this.pushLog(JSON.parse(e.data)));
+    // Progression en direct pendant un run : statuts, clés, compteurs.
+    es.addEventListener('progress', () => {
+      this.refresh();
+      this.loadKeys();
+    });
     es.addEventListener('lock', () => {
       this.refresh();
       this.loadKeys();

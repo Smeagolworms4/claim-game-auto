@@ -62,6 +62,8 @@ async function runProvider(name, { claim = true } = {}) {
       }
       result.seen = offers.length;
       plog.info(`${offers.length} offre(s) détectée(s)`);
+      // L'interface peut afficher la liste sans attendre la fin du run.
+      events.emit('listed', { provider: name, offers, loggedIn: logged });
 
       if (claim && !logged) {
         // On prévient l'utilisateur avec un lien qui ouvre le VNC sur ce store.
@@ -110,6 +112,9 @@ async function runProvider(name, { claim = true } = {}) {
               title: offer.title,
               from: name,
               url: offer.url,
+              // Lien d'activation fourni par le store source : plus sûr que
+              // celui qu'on reconstruit.
+              redeemUrl: res.redeemUrl || null,
             });
           }
 
@@ -140,6 +145,7 @@ async function runProvider(name, { claim = true } = {}) {
           entry.status = 'error';
           entry.message = err.message;
           entry.screenshot = await screenshot(page, name, 'error');
+          events.emit('offer', { provider: name, entry });
           await state.addHistory({
             provider: name,
             title: offer.title,
@@ -148,7 +154,9 @@ async function runProvider(name, { claim = true } = {}) {
             message: err.message,
           });
           plog.error('échec claim', offer.title, '→', err.message);
+          continue;
         }
+        events.emit('offer', { provider: name, entry });
       }
       return result;
     } catch (err) {
@@ -212,7 +220,9 @@ async function redeemKey(key) {
         return { status: 'skipped' };
       }
 
-      const res = await target.addKey(page, key.code);
+      // On passe la clé entière : certains stores ont besoin de son lien
+      // d'activation propre (Legacy Games a une page promo par jeu).
+      const res = await target.addKey(page, key.code, key);
       const done = ['claimed', 'owned'].includes(res.status);
       await state.updateKey(key.code, {
         status: done ? 'redeemed' : res.status === 'dry-run' ? 'pending' : res.status,
@@ -237,8 +247,8 @@ async function redeemKey(key) {
           [
             `Store : ${key.target || 'inconnu'}`,
             `Clé : ${key.code}`,
-            redeemUrl(key.target, key.code)
-              ? `Activer en un clic : ${redeemUrl(key.target, key.code)}`
+            key.redeemUrl || redeemUrl(key.target, key.code)
+              ? `Activer en un clic : ${key.redeemUrl || redeemUrl(key.target, key.code)}`
               : '',
           ]
             .filter(Boolean)

@@ -12,6 +12,7 @@ import * as loginSession from '../login.js';
 import * as vnc from '../vnc.js';
 import * as lock from '../lock.js';
 import { importCookies } from '../cookies.js';
+import { notify } from '../notify.js';
 import * as attention from '../attention.js';
 
 const log = makeLogger('web');
@@ -25,6 +26,22 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 // Cache des offres détectées, alimenté par les runs et les détections manuelles.
 let lastDetection = { at: null, byProvider: {} };
+
+// Progression en direct : l'interface n'attend plus la fin du run pour
+// afficher la liste et les statuts.
+runnerEvents.on('listed', ({ provider, offers, loggedIn }) => {
+  lastDetection.byProvider[provider] = { offers, loggedIn, at: new Date().toISOString() };
+  lastDetection.at = lastDetection.byProvider[provider].at;
+});
+
+runnerEvents.on('offer', ({ provider, entry }) => {
+  const cache = lastDetection.byProvider[provider];
+  if (!cache) return;
+  const i = (cache.offers || []).findIndex((o) => o.id === entry.id);
+  if (i >= 0) cache.offers[i] = entry;
+  else cache.offers.push(entry);
+  cache.at = new Date().toISOString();
+});
 
 runnerEvents.on('run', ({ results }) => {
   const at = new Date().toISOString();
@@ -156,6 +173,47 @@ async function handleApi(req, res, url) {
       return json(res, 200, { ok: true });
     }
 
+    case 'POST /api/unclaimed': {
+      // Symétrique du marquage manuel : sert à corriger un faux « possédé »
+      // pour que l'offre soit de nouveau tentée.
+      const { provider, id } = await readBody(req);
+      if (!provider || !id) return json(res, 400, { error: 'provider et id requis' });
+      const removed = await state.unmarkClaimed(provider, id);
+      const offer = lastDetection.byProvider[provider]?.offers?.find((o) => o.id === id);
+      if (offer) {
+        offer.claimedBefore = false;
+        delete offer.status;
+      }
+      log.info(`${provider} : « ${id} » remis en attente`);
+      return json(res, 200, { removed });
+    }
+
+    case 'POST /api/notify/test': {
+      // Vérifie la chaîne de notification de bout en bout, avec le lien de
+      // l'interface pour contrôler que PUBLIC_URL est correct.
+      const link = config.publicUrl || `http://localhost:${config.webPort}`;
+      await notify(
+        '🔔 claim-auto — test',
+        [
+          'Ceci est une notification de test.',
+          `Interface : ${link}`,
+          config.publicUrl ? '' : '(PUBLIC_URL non défini : ce lien ne marchera que depuis cette machine)',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+      const channels = [
+        config.discordWebhook && 'discord',
+        config.slackWebhook && 'slack',
+        config.telegramToken && config.telegramChatId && 'telegram',
+        config.ntfyTopic && 'ntfy',
+        config.webhookUrl && 'webhook',
+        config.freeMobileUser && config.freeMobilePass && 'sms',
+      ].filter(Boolean);
+      log.info('notification de test envoyée:', channels.join(', ') || 'aucun canal configuré');
+      return json(res, 200, { sent: channels, link });
+    }
+
     case 'POST /api/cancel':
       return json(res, 200, cancel());
 
@@ -239,15 +297,22 @@ async function handleApi(req, res, url) {
       });
       const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       const onLine = (l) => send('log', l);
+      const onOffer = ({ provider, entry }) =>
+        send('progress', { provider, title: entry.title, status: entry.status, code: entry.code });
+      const onListed = ({ provider }) => send('progress', { provider, listed: true });
       const onRun = (r) => send('run', { claimed: r.report.claimed, errors: r.report.errors });
       const onLock = (l) => send('lock', l || {});
       logEvents.on('line', onLine);
+      runnerEvents.on('offer', onOffer);
+      runnerEvents.on('listed', onListed);
       runnerEvents.on('run', onRun);
       lock.lockEvents.on('change', onLock);
       const ping = setInterval(() => res.write(': ping\n\n'), 20000);
       req.on('close', () => {
         clearInterval(ping);
         logEvents.off('line', onLine);
+        runnerEvents.off('offer', onOffer);
+        runnerEvents.off('listed', onListed);
         runnerEvents.off('run', onRun);
         lock.lockEvents.off('change', onLock);
       });

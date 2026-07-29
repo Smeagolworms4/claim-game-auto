@@ -7,6 +7,22 @@ const log = makeLogger('gog');
 const HOME = 'https://www.gog.com/en';
 const CLAIM = 'https://www.gog.com/giveaway/claim';
 
+/** Ferme le bandeau de consentement s'il masque la page. */
+async function dismissConsent(page) {
+  const clicked = await clickFirst(page, [
+    '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+    'button:has-text("Tout accepter")',
+    'button:has-text("Accept all")',
+    'button:has-text("Accepter tout")',
+    'button:has-text("J\'accepte")',
+    'button:has-text("Accept")',
+  ], { timeout: 4000 });
+  if (clicked) {
+    log.debug('bandeau cookies fermé');
+    await sleep(1500);
+  }
+}
+
 export default {
   name: 'gog',
   label: 'GOG',
@@ -131,13 +147,22 @@ export default {
       });
       await sleep(3000);
 
+      // Le bandeau cookies recouvre le bouton de validation : sans le fermer,
+      // le clic n'atteint jamais « Continuer ».
+      await dismissConsent(page);
+
+      // La page de redeem est localisée : en français le bouton est
+      // « Continuer », pas « Continue ». C'est ce qui faisait échouer
+      // l'activation alors que la page s'affichait correctement.
       const clicked = await clickFirst(page, [
-        'button:has-text("Redeem")',
-        'button:has-text("Utiliser")',
-        'button:has-text("Continue")',
         '[data-test="redeem-button"]',
-      ], { timeout: 10000 });
-      await sleep(4000);
+        'button:has-text("Continuer")',
+        'button:has-text("Continue")',
+        'button:has-text("Utiliser")',
+        'button:has-text("Redeem")',
+        'button[type="submit"]',
+      ], { timeout: 12000 });
+      await sleep(5000);
 
       if (reasons.includes('captcha')) {
         return { status: 'captcha', message: 'captcha GOG — active la clé via le VNC' };
@@ -145,12 +170,21 @@ export default {
       if (reasons.includes('code_used')) return { status: 'owned', message: 'clé déjà utilisée' };
       if (reasons.includes('code_not_found')) return { status: 'error', message: 'clé inconnue' };
 
-      const body = (await page.locator('body').innerText().catch(() => '')) || '';
-      if (/added to your account|ajouté à votre compte|success/i.test(body)) {
+      const body = ((await page.locator('body').innerText().catch(() => '')) || '')
+        .replace(/\s+/g, ' ');
+      if (/ajouté à votre compte|added to your account|dans votre bibliothèque|in your library|succès|success/i.test(body)) {
         return { status: 'claimed' };
       }
-      if (!clicked) return { status: 'unknown', message: 'bouton de redeem introuvable' };
-      return { status: 'unknown', message: body.replace(/\s+/g, ' ').slice(0, 120) };
+      if (/déjà utilisé|already been used|already redeemed/i.test(body)) {
+        return { status: 'owned', message: 'clé déjà utilisée' };
+      }
+      if (/connectez-vous|sign in|se connecter/i.test(body) && !/récupérer 1 article/i.test(body)) {
+        return { status: 'error', message: 'session GOG expirée' };
+      }
+      if (!clicked) return { status: 'unknown', message: 'bouton de validation introuvable' };
+      // On ne recopie pas la page entière dans l'historique : juste l'utile.
+      const hint = body.match(/(Vous allez récupérer[^.]{0,60}|You will get[^.]{0,60})/i);
+      return { status: 'unknown', message: hint ? hint[1] : body.slice(0, 100) };
     } finally {
       page.off('response', onResponse);
     }
