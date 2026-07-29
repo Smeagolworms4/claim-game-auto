@@ -1,55 +1,57 @@
 # claim-auto
 
-Réclame automatiquement les jeux gratuits **Epic Games Store**, **Steam**, **GOG** et
-**Amazon Prime Gaming / Luna**. Node.js + Playwright, tourne en Docker, avec une
-interface web pour voir ce qui est dispo et un VNC intégré pour les connexions.
+*Read this in [French](README.fr.md).*
+
+Automatically claims the free games from the **Epic Games Store**, **Steam**, **GOG** and
+**Amazon Prime Gaming / Luna**. Node.js + Playwright, runs in Docker, with a web
+interface to see what is available and a built-in VNC for the logins.
 
 ![providers](https://img.shields.io/badge/stores-epic%20%7C%20steam%20%7C%20gog%20%7C%20prime-6ee7a8)
 
-## Ce que ça fait
+## What it does
 
-- **Détecte** les jeux gratuits en cours sur les 4 stores (fonctionne même sans être connecté).
-- **Réclame** automatiquement, deux fois par jour par défaut (cron configurable).
-- **Interface web** (port 8080, Vue 3 + Vuetify) : offres détectées, état de connexion par store, journal en direct, historique, boutons « Détecter » / « Réclamer ».
-- **VNC à la demande** : pour se connecter à un store (mot de passe + 2FA), l'interface ouvre un vrai Chrome dans le conteneur, affiché dans la page. Dès que tu cliques « J'ai fini », le VNC est coupé et tout repasse en headless.
-- **Historique** horodaté de chaque tentative (`data/history.json`), consultable dans l'interface.
-- **Notifications** par catégorie (Discord, Slack, Telegram, ntfy, webhook générique, SMS Free Mobile) : résultat du claim, échec, jeux disponibles, et **demande de déblocage avec un lien qui ouvre le VNC** — une fois débloqué, le claim reprend tout seul.
-- **Réglages dans l'interface**, persistés : tout ce qui n'est pas imposé dans `.env` se règle graphiquement (webhooks, plannings, navigateur par store…).
-- **Import de cookies** : si un captcha bloque la connexion dans le VNC, tu te connectes dans ton navigateur habituel et tu colles les cookies.
-- Mémorise ce qui a déjà été pris (`data/state.json`) pour ne pas re-tenter en boucle.
+- **Detects** the currently free games on the 4 stores (works even when not logged in).
+- **Claims** them automatically, twice a day by default (configurable cron).
+- **Web interface** (port 8080, Vue 3 + Vuetify): detected offers, login state per store, live log, history, "Detect" / "Claim" buttons.
+- **On-demand VNC**: to log in to a store (password + 2FA), the interface opens a real Chrome inside the container, displayed in the page. As soon as you click "I'm done", the VNC is shut down and everything goes back to headless.
+- Timestamped **history** of every attempt (`data/history.json`), browsable from the interface.
+- **Notifications** by category (Discord, Slack, Telegram, ntfy, generic webhook, Free Mobile SMS): claim result, failure, available games, and an **unlock request with a link that opens the VNC** — once unlocked, the claim resumes on its own.
+- **Settings in the interface**, persisted: everything that is not forced in `.env` can be set graphically (webhooks, schedules, browser per store…).
+- **Cookie import**: if a captcha blocks the login inside the VNC, you log in with your usual browser and paste the cookies.
+- Remembers what has already been claimed (`data/state.json`) so it does not retry in a loop.
 
-## Démarrage
+## Getting started
 
 ```bash
-cp .env.example .env      # ajuste TZ, cron, notifications…
+cp .env.example .env      # adjust TZ, cron, notifications…
 docker compose up -d
 ```
 
-Puis ouvre **http://localhost:8080**.
+Then open **http://localhost:8080**.
 
-Pour chaque store : clique **« Connexion »**, connecte-toi dans le navigateur qui
-s'affiche (mot de passe, 2FA, captcha éventuel), puis clique **« J'ai fini »**. Le profil
-est sauvegardé dans `data/profiles/<store>/` — c'est à faire une seule fois.
+For each store: click **"Login"**, log in inside the browser that is displayed
+(password, 2FA, possible captcha), then click **"I'm done"**. The profile is saved
+in `data/profiles/<store>/` — this only has to be done once.
 
-Si un captcha t'empêche de te connecter là, utilise l'**import de cookies** (bouton 🍪) :
-voir *Dépannage*.
+If a captcha prevents you from logging in there, use the **cookie import** (🍪 button):
+see *Troubleshooting*.
 
-Ensuite, plus rien à toucher : le cron fait le reste.
+After that, nothing left to do: the cron handles the rest.
 
-### Tester sans attendre le cron
+### Testing without waiting for the cron
 
 ```bash
-docker compose run --rm test detect        # juste lister ce qui est gratuit
-docker compose run --rm test detect epic   # un seul store
-docker compose run --rm test run           # réclamer maintenant
+docker compose run --rm test detect        # just list what is free
+docker compose run --rm test detect epic   # a single store
+docker compose run --rm test run           # claim now
 docker compose run --rm test run gog
-docker compose run --rm test status        # ce qui a déjà été pris
+docker compose run --rm test status        # what has already been claimed
 ```
 
-Ou depuis l'interface web (boutons « Détecter » / « Réclamer »).
-Le mode **Simulation** (réglages, ou `DRY_RUN=true`) détecte sans rien valider.
+Or from the web interface ("Detect" / "Claim" buttons).
+The **Simulation** mode (settings, or `DRY_RUN=true`) detects without confirming anything.
 
-### Sans Docker
+### Without Docker
 
 ```bash
 npm install && npx playwright install chromium
@@ -58,115 +60,116 @@ node src/index.js daemon
 
 ### Architectures
 
-L'image fonctionne en **amd64** et en **arm64** (Raspberry Pi, Apple Silicon, addon Home
-Assistant `aarch64`) : Chromium est disponible pour les deux, d'où son choix par défaut.
+The image works on **amd64** and on **arm64** (Raspberry Pi, Apple Silicon, `aarch64`
+Home Assistant add-on): Chromium is available for both, hence it being the default.
 
-Google Chrome, lui, n'est publié qu'en amd64. Si tu veux l'utiliser malgré tout — son
-empreinte est un peu plus banale pour les protections anti-bot — construis l'image avec :
+Google Chrome, on the other hand, is only published for amd64. If you want to use it
+anyway — its fingerprint is a bit more ordinary for anti-bot protections — build the
+image with:
 
 ```bash
 docker compose build --build-arg INSTALL_CHROME=true
-# puis BROWSER=chrome dans .env, ou le réglage correspondant dans l'interface
+# then BROWSER=chrome in .env, or the matching setting in the interface
 ```
 
-Le code vérifie la présence du binaire au lancement et retombe silencieusement sur
-Chromium s'il est absent, donc la même image reste utilisable partout.
+The code checks whether the binary is present at startup and silently falls back to
+Chromium if it is missing, so the same image stays usable everywhere.
 
 ## Configuration
 
-Tout se passe dans `.env` (voir `.env.example`). Les réglages qui comptent :
+Everything happens in `.env` (see `.env.example`). The settings that matter:
 
-| Variable | Défaut | Rôle |
+| Variable | Default | Purpose |
 |---|---|---|
-| `CRON_SCHEDULE` | `5 12,20 * * *` | Quand réclamer (cron 5 champs) |
-| `DETECT_SCHEDULE` | `0 */6 * * *` | Quand rafraîchir la liste des jeux (vide = désactivé) |
-| `PUBLIC_URL` | vide | URL publique, pour les liens de déblocage envoyés en notification |
-| `NOTIFY_EVENTS` | `claim,failure,captcha` | Catégories notifiées (+ `available`) |
-| `SLACK_WEBHOOK`, `WEBHOOK_URL`, `FREEMOBILE_USER`/`_PASS` | vide | Autres canaux |
-| `PROVIDERS` | `epic,steam,gog,prime` | Stores actifs |
-| `COUNTRY` / `LOCALE` | `FR` / `fr-FR` | Pays du store (prix et offres en dépendent) |
-| `BROWSER` | `chromium` | `chromium` (amd64 + arm64), `chrome` (amd64, image construite avec `INSTALL_CHROME=true`) ou `firefox` |
-| `HEADLESS` | `true` | Runs planifiés sans affichage |
-| `DRY_RUN` | `false` | Détecte sans réclamer |
-| `WEB_USER` / `WEB_PASSWORD` | vide | Auth basique sur l'interface |
-| `WEB_PORT_HOST` | `8080` | Port côté hôte si 8080 est pris |
-| `PRIME_CLAIM_LOOT` | `false` | Réclamer aussi le loot in-game Prime |
-| `AUTO_REDEEM_KEYS` | `true` | Activer les clés Prime sur le store partenaire après un run |
-| `LEGACY_EMAIL` | vide | E-mail pour les activations Legacy Games |
-| `STEAM_EXTRA_SUBIDS` | vide | Packages Steam à activer en plus |
-| `DISCORD_WEBHOOK`, `TELEGRAM_*`, `NTFY_TOPIC` | vide | Notifications |
+| `CRON_SCHEDULE` | `5 12,20 * * *` | When to claim (5-field cron) |
+| `DETECT_SCHEDULE` | `0 */6 * * *` | When to refresh the game list (empty = disabled) |
+| `PUBLIC_URL` | empty | Public URL, for the unlock links sent in notifications |
+| `NOTIFY_EVENTS` | `claim,failure,captcha` | Notified categories (plus `available`) |
+| `SLACK_WEBHOOK`, `WEBHOOK_URL`, `FREEMOBILE_USER`/`_PASS` | empty | Other channels |
+| `PROVIDERS` | `epic,steam,gog,prime` | Active stores |
+| `COUNTRY` / `LOCALE` | `FR` / `fr-FR` | Store country (prices and offers depend on it) |
+| `BROWSER` | `chromium` | `chromium` (amd64 + arm64), `chrome` (amd64, image built with `INSTALL_CHROME=true`) or `firefox` |
+| `HEADLESS` | `true` | Scheduled runs without a display |
+| `DRY_RUN` | `false` | Detect without claiming |
+| `WEB_USER` / `WEB_PASSWORD` | empty | Basic auth on the interface |
+| `WEB_PORT_HOST` | `8080` | Host-side port if 8080 is taken |
+| `PRIME_CLAIM_LOOT` | `false` | Also claim the Prime in-game loot |
+| `AUTO_REDEEM_KEYS` | `true` | Redeem the Prime keys on the partner store after a run |
+| `LEGACY_EMAIL` | empty | E-mail for the Legacy Games activations |
+| `STEAM_EXTRA_SUBIDS` | empty | Extra Steam packages to activate |
+| `DISCORD_WEBHOOK`, `TELEGRAM_*`, `NTFY_TOPIC` | empty | Notifications |
 
-> **Un seul navigateur pour tous les stores** : Chromium. Passer de `chromium` à `chrome`
-> conserve les sessions (même famille de profil) ; passer à `firefox`, non — les profils
-> sont effacés et il faut refaire les connexions.
+> **A single browser for all the stores**: Chromium. Switching from `chromium` to `chrome`
+> keeps the sessions (same profile family); switching to `firefox` does not — the profiles
+> are wiped and you have to log in again.
 
-## Réglages : interface d'abord, `.env` en secours
+## Settings: interface first, `.env` as a fallback
 
-Les variables de `.env` ne sont que des **valeurs par défaut**. Tout se règle dans
-l'interface (icône ⚙️) et est persisté dans `data/state.json`, appliqué à chaud —
-changer un planning ou un webhook ne demande aucun redémarrage.
+The variables in `.env` are only **default values**. Everything can be set from the
+interface (⚙️ icon) and is persisted in `data/state.json`, applied on the fly —
+changing a schedule or a webhook requires no restart.
 
-Inversement, une variable **non vide** dans `.env` *verrouille* le réglage : le champ
-apparaît grisé dans l'interface avec le nom de la variable en cause. Pratique pour
-figer une valeur (déploiement géré, secret injecté), gênant si c'est involontaire —
-d'où les valeurs par défaut commentées dans `.env.example`.
+Conversely, a **non-empty** variable in `.env` *locks* the setting: the field appears
+greyed out in the interface, with the name of the variable responsible. Handy to pin a
+value down (managed deployment, injected secret), annoying when it is unintentional —
+hence the commented-out default values in `.env.example`.
 
-## Notifications et déblocage à distance
+## Notifications and remote unlocking
 
-Quatre catégories, activables séparément :
+Four categories, each of which can be enabled separately:
 
-| Catégorie | Quand |
+| Category | When |
 |---|---|
-| `claim` | compte rendu du claim automatique |
-| `failure` | échec d'un claim, ou clé impossible à activer (la clé et le lien du store sont dans le message) |
-| `captcha` | une intervention humaine est nécessaire |
-| `available` | des jeux gratuits ont été détectés |
+| `claim` | report of the automatic claim |
+| `failure` | a claim failed, or a key could not be redeemed (the key and the store link are in the message) |
+| `captcha` | human intervention is required |
+| `available` | free games have been detected |
 
-Canaux : Discord, Slack, Telegram, ntfy, **SMS via l'API Free Mobile**, et un
-**webhook générique** au gabarit libre (`{{title}}` / `{{text}}`) pour brancher
-Gotify, Home Assistant, une passerelle SMS, etc.
+Channels: Discord, Slack, Telegram, ntfy, **SMS through the Free Mobile API**, and a
+**generic webhook** with a free-form template (`{{title}}` / `{{text}}`) to plug in
+Gotify, Home Assistant, an SMS gateway, etc.
 
-La notification `captcha` contient un **lien à usage unique** (`PUBLIC_URL/unlock/<jeton>`) :
-l'ouvrir démarre le VNC sur le bon store, affiche le navigateur, et le bouton
-« C'est débloqué » referme la session **et relance le claim de ce store**. Le lien porte
-son propre secret : il fonctionne sans mot de passe, et survit à un redémarrage.
+The `captcha` notification contains a **single-use link** (`PUBLIC_URL/unlock/<token>`):
+opening it starts the VNC on the right store, displays the browser, and the
+"It's unlocked" button closes the session **and restarts the claim for that store**.
+The link carries its own secret: it works without a password, and survives a restart.
 
 ## Architecture
 
 ```
 src/
   index.js            CLI + daemon (cron)
-  runner.js           orchestration : détecte → réclame → notifie
-  browser.js          contextes Playwright persistants (un profil par store)
-  login.js            sessions de connexion manuelles (navigateur visible)
-  vnc.js              Xvfb / x11vnc / noVNC, démarrés à la demande
-  lock.js             un seul navigateur à la fois
-  state.js            jeux déjà réclamés + historique
+  runner.js           orchestration: detect → claim → notify
+  browser.js          persistent Playwright contexts (one profile per store)
+  login.js            manual login sessions (visible browser)
+  vnc.js              Xvfb / x11vnc / noVNC, started on demand
+  lock.js             a single browser at a time
+  state.js            already claimed games + history
   notify.js           Discord / Telegram / ntfy
-  providers/          un handler séparé par store
+  providers/          a separate handler per store
     epic.js  steam.js  gog.js  prime.js
-  attention.js        demandes d'intervention + liens de déblocage à usage unique
-  cookies.js          import de cookies depuis un autre navigateur
-  web/                serveur HTTP + dashboard Vue 3 / Vuetify (une seule page,
-                      sans build ; Vue, Vuetify et les icônes sont servis depuis
-                      node_modules, donc aucun CDN requis)
+  attention.js        intervention requests + single-use unlock links
+  cookies.js          cookie import from another browser
+  web/                HTTP server + Vue 3 / Vuetify dashboard (a single page,
+                      no build step; Vue, Vuetify and the icons are served from
+                      node_modules, so no CDN is required)
 ```
 
-Chaque handler déclare **ce qu'il sait faire** — toutes les fonctions sont optionnelles :
+Each handler declares **what it is able to do** — every function is optional:
 
 ```js
 export default {
-  name: 'monstore',
-  label: 'Mon Store',
+  name: 'mystore',
+  label: 'My Store',
   loginUrl: 'https://…',
-  async isLoggedIn(page)   { /* → bool                                   */ },
-  async list(page)         { /* → [{ id, title, url }]  offres gratuites */ },
-  async claim(page, offer) { /* → { status } récupérer (« keep ») l'offre */ },
-  async addKey(page, code) { /* → { status } activer une clé sur ce store */ },
+  async isLoggedIn(page)   { /* → bool                                     */ },
+  async list(page)         { /* → [{ id, title, url }]  free offers        */ },
+  async claim(page, offer) { /* → { status } claim ("keep") the offer      */ },
+  async addKey(page, code) { /* → { status } redeem a key on this store    */ },
 };
 ```
-…puis l'enregistrer dans `src/providers/index.js`. Un store peut être **source
-d'offres**, **cible d'activation de clés**, ou les deux :
+…then register it in `src/providers/index.js`. A store can be an **offer source**, a
+**key redemption target**, or both:
 
 | Handler | `list` | `claim` | `addKey` |
 |---|:--:|:--:|:--:|
@@ -176,118 +179,156 @@ d'offres**, **cible d'activation de clés**, ou les deux :
 | prime | ✅ | ✅ | — |
 | legacy | — | — | ✅ |
 
-`GET /api/status` renvoie les capacités de chaque handler, et le runner saute
-automatiquement dans les runs ceux qui n'ont pas de `list` (Legacy Games).
+`GET /api/status` returns the capabilities of every handler, and during runs the runner
+automatically skips those that have no `list` (Legacy Games).
 
-### Clés Prime → GOG / Legacy Games
+### Prime keys → GOG / Legacy Games
 
-Beaucoup d'offres Prime/Luna ne sont pas récupérées sur place : elles donnent une
-**clé à activer sur un store partenaire**. Le flux est automatique :
+Many Prime/Luna offers are not claimed on the spot: they hand out a **key to redeem on a
+partner store**. The flow is automatic:
 
-1. `prime.claim()` récupère la clé et identifie le store cible — via les liens de
-   la page Amazon, sinon via le suffixe du slug (`…-gog`, `…-legacy`, `…-ms`).
-2. La clé est enregistrée dans `data/state.json` (elle n'est jamais perdue, même
-   si l'activation échoue).
-3. Le runner appelle `addKey()` du store cible **dans le contexte navigateur de
-   ce store** — une clé GOG a besoin de la session GOG, pas de celle d'Amazon.
-4. Les clés en attente s'affichent dans l'interface (panneau « Clés à activer »),
-   avec un bouton pour relancer l'activation.
+1. `prime.claim()` retrieves the key and identifies the target store — through the links
+   on the Amazon page, otherwise through the slug suffix (`…-gog`, `…-legacy`, `…-ms`).
+2. The key is saved in `data/state.json` (it is never lost, even if the redemption fails).
+3. The runner calls the target store's `addKey()` **inside that store's browser
+   context** — a GOG key needs the GOG session, not the Amazon one.
+4. Pending keys are shown in the interface ("Keys to redeem" panel), with a button to
+   retry the redemption.
 
-Legacy Games ne demande pas de compte, juste un e-mail : renseigne `LEGACY_EMAIL`.
-Les cibles non automatisées (Microsoft Store) sont marquées `manual` avec la clé
-en clair dans l'interface.
+Legacy Games does not require an account, just an e-mail: fill in `LEGACY_EMAIL`.
+Targets that are not automated (Microsoft Store) are marked `manual` with the key
+in plain text in the interface.
 
-## Comment chaque store est géré
+## How each store is handled
 
-| Store | Détection | Claim |
+| Store | Detection | Claim |
 |---|---|---|
-| **Epic** | API publique `freeGamesPromotions` (offre à -100 % *et* prix effectif à 0) | Page produit → `Obtenir` → iframe de commande → `Commander` |
-| **Steam** | Recherche `maxprice=free&specials=1` (promos « à conserver ») | Formulaire `addfreelicense` de la page du jeu |
-| **GOG** | Bannière `#giveaway` de la home | Endpoint `/giveaway/claim` (JSON) |
-| **Prime / Luna** | `gaming.amazon.com`, onglet *Games* (+ *In-game loot* en option) | Bouton `Claim` de la page de l'offre ; la clé éventuelle est loguée et notifiée |
+| **Epic** | Public `freeGamesPromotions` API (offer at -100% *and* effective price at 0) | Product page → `Get` → order iframe → `Place Order` |
+| **Steam** | `maxprice=free&specials=1` search (promotions you get to "keep") | `addfreelicense` form on the game page |
+| **GOG** | `#giveaway` banner on the home page | `/giveaway/claim` endpoint (JSON) |
+| **Prime / Luna** | `gaming.amazon.com`, *Games* tab (plus *In-game loot* optionally) | `Claim` button on the offer page; any key is logged and notified |
 
-**Luna** : les offres Prime Gaming alimentent la bibliothèque Luna du même compte
-Amazon — il n'y a pas de claim Luna séparé.
+**Luna**: Prime Gaming offers feed the Luna library of the same Amazon account — there is
+no separate Luna claim.
 
-## Dépannage
+## Docker Hub image and automatic publication
 
-### Captcha Cloudflare en boucle
+The image is published on Docker Hub as **`smeagolworms4/claim-game-auto`**
+(`latest` and `main` tags), for `linux/amd64` and `linux/arm64`. It ships with Chromium
+only: `INSTALL_CHROME` is left at its default value of `false`, because Google Chrome is
+only published for amd64 and would break the arm64 build.
 
-Symptôme : dans le VNC, la case « Vérifiez que vous êtes humain » se relance
-indéfiniment et on ne peut pas se connecter.
+```bash
+docker run -d \
+  --name claim-auto \
+  --restart unless-stopped \
+  --stop-timeout 45 \
+  --user 1000:1000 \
+  --env-file .env \
+  -e HOME=/data/home \
+  -p 8080:8080 \
+  -v "$(pwd)/data:/data" \
+  --shm-size 1gb \
+  smeagolworms4/claim-game-auto:latest
+```
 
-**Le challenge est intermittent** : sur la même page Epic, à quelques heures
-d'intervalle, Chrome et Firefox ont tous deux été bloqués puis tous deux passés. Ce
-n'est donc pas le moteur qui décide — c'est la réputation de l'IP au moment de la
-requête. Changer de navigateur peut débloquer sur le coup, mais ne règle rien de
-façon durable.
+Ports `6080` (noVNC) and `5900` (raw VNC) only need to be published for a standalone VNC
+client: the web interface already proxies noVNC on its own port 8080.
 
-En pratique : **réessayer plus tard** suffit souvent (le profil conserve son
-`cf_clearance` une fois obtenu), et l'**import de cookies** règle le cas définitivement.
+### GitHub secrets to create by hand
 
-Si *tous* les stores bouclent, y compris dans ton navigateur habituel sur la même
-machine, le problème est ton **adresse IP** (VPN, IP d'hébergeur, plage réputée) et non
-l'automatisation : Cloudflare challenge l'IP. Teste la page dans ton navigateur hôte
-pour trancher.
+Two GitHub Actions workflows are provided in `.github/workflows/`:
+`build_images.yml` (multi-architecture build + image push) and `push_readme.yml`
+(synchronisation of the Docker Hub description from this README).
 
-### Le captcha est infranchissable, même en Firefox
+Both need **two repository secrets** that cannot be created by the code: they have to be
+added by hand in the GitHub repository's *Settings → Secrets and variables → Actions*.
 
-Regarde d'abord **ton IP**. Sur une connexion partagée à mauvaise réputation
-(Starlink et son CGNAT, VPN, IP d'hébergeur), Cloudflare et Google challengent
-l'adresse elle-même : aucun réglage de navigateur n'y changera quoi que ce soit.
+| Secret | Content |
+|---|---|
+| `DOCKER_USERNAME` | your Docker Hub username (it is also used to build the image name) |
+| `DOCKER_PASSWORD` | a Docker Hub *access token* (Account Settings → Security → New Access Token) |
 
-La parade est de **ne pas se connecter depuis le conteneur** :
+Without those two secrets, the workflows fail at the Docker Hub login step.
 
-1. connecte-toi au store dans ton navigateur habituel ;
-2. exporte les cookies du site (extension type *Cookie-Editor* → Export JSON) ;
-3. dans l'interface, bouton 🍪 sur la carte du store, colle, importe.
+## Troubleshooting
 
-La session est alors reconnue et les runs headless fonctionnent normalement — c'est
-la seule étape qui butait sur le captcha.
+### Cloudflare captcha in a loop
 
-### Un store affiche « inconnu » ou « non connecté » alors que je viens de me connecter
+Symptom: inside the VNC, the "Verify you are human" checkbox restarts endlessly and you
+cannot log in.
 
-L'état de connexion vient de la dernière détection. Après un login réussi, une détection
-est relancée automatiquement — attends quelques secondes, ou clique **Détecter**.
-Si ça persiste, regarde le journal : la vraie raison y est (challenge, session expirée…).
+**The challenge is intermittent**: on the very same Epic page, a few hours apart, Chrome
+and Firefox were both blocked and then both let through. So it is not the engine that
+decides — it is the reputation of the IP at the time of the request. Switching browsers
+may unblock you there and then, but it fixes nothing durably.
 
-Attention à un piège : **ne redémarre pas le conteneur pendant qu'une session de login
-est ouverte**. Chrome n'écrit ses cookies qu'à la fermeture ; un arrêt brutal perd la
-session (et laisse un verrou de profil, que le tool nettoie désormais au lancement
-suivant). Clique toujours « J'ai fini » avant de toucher au conteneur.
+In practice: **trying again later** is often enough (the profile keeps its `cf_clearance`
+once obtained), and the **cookie import** settles the case for good.
 
-## Limites connues
+If *all* the stores loop, including in your usual browser on the same machine, the
+problem is your **IP address** (VPN, hosting-provider IP, poorly-rated range) and not the
+automation: Cloudflare is challenging the IP. Test the page in your host browser to find
+out.
 
-- **Offres Prime nécessitant un compte lié** (GOG, Epic, Microsoft, Legacy Games) : le
-  claim et l'activation de clé sont automatisés pour GOG, Epic, Steam et Legacy, mais si
-  Amazon exige le *linking* du compte, l'offre est marquée *« action manuelle »* — à faire
-  une fois via le VNC. Le Microsoft Store n'est pas automatisé : la clé est affichée.
-  Idem pour les quelques cartes du carrousel Amazon qui n'exposent pas de fiche
-  produit : elles sont détectées, mais à réclamer à la main si le clic automatique échoue.
-- **Epic est servi par Firefox** et pas par Chrome, à cause du Turnstile Cloudflare
-  (voir *Dépannage*). La détection des jeux gratuits, elle, passe par l'API publique et
-  n'est jamais affectée.
-- **Captcha Epic au moment du claim** : rare une fois la session établie. Le claim est alors
-  marqué `captcha` avec une capture dans `data/screenshots/` — ouvre le VNC et refais-le à la main.
-- **Steam** limite à ~50 activations de licences gratuites par heure.
-- Les sélecteurs suivent le HTML des boutiques : une refonte côté store peut casser un
-  handler. Le journal et les captures d'écran servent à diagnostiquer.
-- Les sessions expirent au bout de quelques semaines/mois : l'interface affiche
-  *« non connecté »*, il suffit de refaire le login VNC.
+### The captcha cannot be beaten, even in Firefox
 
-## Sécurité
+Look at **your IP** first. On a shared connection with a bad reputation (Starlink and its
+CGNAT, VPN, hosting-provider IP), Cloudflare and Google challenge the address itself: no
+browser setting will change anything about it.
 
-Aucun identifiant n'est stocké par l'outil : seuls les **cookies de session** vivent dans
-les profils navigateur (`data/profiles/`). Sauvegarde ce dossier comme un secret, et mets
-`WEB_USER`/`WEB_PASSWORD` si tu exposes l'interface au-delà de ton réseau local.
+The way around it is to **not log in from the container**:
 
-Les ports `6080`/`5900` du compose ne sont utiles que pour un client VNC lourd :
-l'interface web proxifie déjà noVNC sur son propre port. Tu peux les retirer.
+1. log in to the store with your usual browser;
+2. export the site's cookies (an extension such as *Cookie-Editor* → Export JSON);
+3. in the interface, 🍪 button on the store card, paste, import.
 
-## Avertissement
+The session is then recognised and headless runs work normally — the captcha was the only
+step that was getting stuck.
 
-Outil destiné à un usage personnel, sur tes propres comptes. L'activation de licences
-gratuites est une fonction native de Steam ; côté Epic, Amazon et GOG il s'agit
-d'automatiser une action que tu ferais à la main — ce que leurs conditions d'utilisation
-n'encouragent pas. Espace les runs (le défaut, 2×/jour, est déjà conservateur) et
-utilise-le en connaissance de cause.
+### A store shows "unknown" or "not logged in" even though I just logged in
+
+The login state comes from the last detection. After a successful login, a detection is
+run again automatically — wait a few seconds, or click **Detect**. If it persists, look at
+the log: the real reason is in there (challenge, expired session…).
+
+Watch out for one pitfall: **do not restart the container while a login session is
+open**. Chrome only writes its cookies when it closes; an abrupt shutdown loses the
+session (and leaves a profile lock behind, which the tool now cleans up on the next
+startup). Always click "I'm done" before touching the container.
+
+## Known limitations
+
+- **Prime offers requiring a linked account** (GOG, Epic, Microsoft, Legacy Games): the
+  claim and the key redemption are automated for GOG, Epic, Steam and Legacy, but if
+  Amazon requires the account to be *linked*, the offer is marked *"manual action"* — to
+  be done once through the VNC. The Microsoft Store is not automated: the key is
+  displayed. Same goes for the few cards in the Amazon carousel that do not expose a
+  product page: they are detected, but have to be claimed by hand if the automatic click
+  fails.
+- **Epic is served by Firefox** and not by Chrome, because of the Cloudflare Turnstile
+  (see *Troubleshooting*). Free game detection, however, goes through the public API and
+  is never affected.
+- **Epic captcha at claim time**: rare once the session is established. The claim is then
+  marked `captcha` with a screenshot in `data/screenshots/` — open the VNC and do it by hand.
+- **Steam** limits you to ~50 free license activations per hour.
+- The selectors follow the stores' HTML: a redesign on the store side can break a
+  handler. The log and the screenshots are there to diagnose it.
+- Sessions expire after a few weeks/months: the interface shows *"not logged in"*, you
+  just have to redo the VNC login.
+
+## Security
+
+No credentials are stored by the tool: only the **session cookies** live in the browser
+profiles (`data/profiles/`). Back that folder up as you would a secret, and set
+`WEB_USER`/`WEB_PASSWORD` if you expose the interface beyond your local network.
+
+The compose file's `6080`/`5900` ports are only useful for a standalone VNC client: the
+web interface already proxies noVNC on its own port. You can remove them.
+
+## Disclaimer
+
+A tool meant for personal use, on your own accounts. Activating free licenses is a native
+Steam feature; on the Epic, Amazon and GOG side it is about automating an action you would
+otherwise perform by hand — something their terms of service do not encourage. Space the
+runs out (the default, 2×/day, is already conservative) and use it knowingly.
