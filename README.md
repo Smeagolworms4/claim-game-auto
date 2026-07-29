@@ -1,11 +1,16 @@
 # claim-auto
 
+[!["Buy Me A Coffee"](https://raw.githubusercontent.com/Smeagolworms4/donate-assets/master/coffee.png)](https://www.buymeacoffee.com/smeagolworms4)
+[!["Buy Me A Coffee"](https://raw.githubusercontent.com/Smeagolworms4/donate-assets/master/paypal.png)](https://www.paypal.com/donate/?business=SURRPGEXF4YVU&no_recurring=0&item_name=Hello%2C+I%27m+SmeagolWorms4.+For+my+open+source+projects.%0AThanks+you+very+mutch+%21%21%21&currency_code=EUR)
+
 *Read this in [French](README.fr.md).*
 
 Automatically claims the free games from the **Epic Games Store**, **Steam**, **GOG** and
 **Amazon Prime Gaming / Luna**. Node.js + Playwright, runs in Docker, with a web
 interface to see what is available and a built-in VNC for the logins.
 
+[![Docker Pulls](https://img.shields.io/docker/pulls/smeagolworms4/claim-game-auto)](https://hub.docker.com/r/smeagolworms4/claim-game-auto)
+[![Image Size](https://img.shields.io/docker/image-size/smeagolworms4/claim-game-auto/latest)](https://hub.docker.com/r/smeagolworms4/claim-game-auto)
 ![providers](https://img.shields.io/badge/stores-epic%20%7C%20steam%20%7C%20gog%20%7C%20prime-6ee7a8)
 
 ## What it does
@@ -22,10 +27,54 @@ interface to see what is available and a built-in VNC for the logins.
 
 ## Getting started
 
+Nothing to clone, nothing to build: the image is published on
+[Docker Hub](https://hub.docker.com/r/smeagolworms4/claim-game-auto). Create an empty
+folder and put this `docker-compose.yml` in it:
+
+```yaml
+services:
+  claim-auto:
+    image: smeagolworms4/claim-game-auto:latest
+    container_name: claim-auto
+    restart: unless-stopped
+    # Gives the browser time to shut down cleanly: otherwise an in-progress
+    # login session is killed before Chrome has written its cookies.
+    stop_grace_period: 45s
+    # Writes into ./data with your own UID rather than as root.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file:
+      - .env
+    environment:
+      HOME: /data/home
+    ports:
+      # Host-side ports, overridable in .env if they are already taken.
+      - "${WEB_PORT_HOST:-8080}:8080"     # web interface
+      - "${NOVNC_PORT_HOST:-6080}:6080"   # noVNC (opened on demand)
+      - "${VNC_PORT_HOST:-5900}:5900"     # raw VNC (standalone client, optional)
+    volumes:
+      - ./data:/data
+    shm_size: "1gb"   # otherwise Firefox/Chromium crash on large pages
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+```
+
+Then, next to it:
+
 ```bash
 cp .env.example .env      # adjust TZ, cron, notifications…
 docker compose up -d
 ```
+
+`env_file` is mandatory, so the `.env` file has to exist — but it may perfectly well be
+empty (`touch .env`) if you do not have the repository at hand: every setting can be
+filled in from the interface afterwards. Set `PUID`/`PGID` in it if your user is not
+`1000:1000`, and `WEB_PORT_HOST` / `NOVNC_PORT_HOST` / `VNC_PORT_HOST` if those host
+ports are taken. The `./data` folder is created on the first start and holds everything
+that has to survive a restart (browser profiles, state, history).
 
 Then open **http://localhost:8080**.
 
@@ -37,6 +86,21 @@ If a captcha prevents you from logging in there, use the **cookie import** (🍪
 see *Troubleshooting*.
 
 After that, nothing left to do: the cron handles the rest.
+
+### Development: building the image locally
+
+The `docker-compose.yml` **of this repository** is a different one: it builds the image
+from the local `Dockerfile` instead of pulling the published one, and it declares the
+extra `test` service used by the commands below. From a clone:
+
+```bash
+git clone https://github.com/Smeagolworms4/claim-game-auto.git && cd claim-game-auto
+cp .env.example .env
+docker compose up -d --build
+```
+
+Use that one to work on the code; the compose file above, with `image:`, to simply run
+the tool.
 
 ### Testing without waiting for the cron
 
@@ -213,10 +277,32 @@ no separate Luna claim.
 
 ## Docker Hub image and automatic publication
 
-The image is published on Docker Hub as **`smeagolworms4/claim-game-auto`**
-(`latest` and `main` tags), for `linux/amd64` and `linux/arm64`. It ships with Chromium
-only: `INSTALL_CHROME` is left at its default value of `false`, because Google Chrome is
-only published for amd64 and would break the arm64 build.
+**https://hub.docker.com/r/smeagolworms4/claim-game-auto**
+
+[![Docker Pulls](https://img.shields.io/docker/pulls/smeagolworms4/claim-game-auto)](https://hub.docker.com/r/smeagolworms4/claim-game-auto)
+[![Image Size](https://img.shields.io/docker/image-size/smeagolworms4/claim-game-auto/latest)](https://hub.docker.com/r/smeagolworms4/claim-game-auto)
+
+The image is published for two architectures, from a single multi-arch manifest — the same
+tag works on a PC and on a Raspberry Pi:
+
+| Architecture | Typical target |
+|---|---|
+| `linux/amd64` | PC / server / NAS x86-64 |
+| `linux/arm64` | Raspberry Pi 4-5 (64-bit), Apple Silicon, `aarch64` |
+
+Published tags:
+
+| Tag | Built on |
+|---|---|
+| `latest` | every push to `main`, and every git tag — the one to use |
+| `main` | every push to the `main` branch (the tip of development) |
+| `<version>` (e.g. `1.0.0`) | creation of a git tag of that name, to pin a version |
+
+It ships with Chromium only: `INSTALL_CHROME` is left at its default value of `false`,
+because Google Chrome is only published for amd64 and would break the arm64 build.
+
+The recommended way to run it is the `docker-compose.yml` given in
+*[Getting started](#getting-started)*. The equivalent as a single command:
 
 ```bash
 docker run -d \
