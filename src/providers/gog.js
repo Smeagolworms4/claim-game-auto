@@ -164,8 +164,18 @@ export default {
       ], { timeout: 12000 });
       await sleep(5000);
 
-      if (reasons.includes('captcha')) {
-        return { status: 'captcha', message: 'captcha GOG — active la clé via le VNC' };
+      // Captcha : soit l'API le dit, soit le widget est visible dans la page.
+      const widget = await page
+        .locator('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[title*="captcha" i], .g-recaptcha, [data-sitekey]')
+        .first()
+        .isVisible({ timeout: 2500 })
+        .catch(() => false);
+      if (reasons.includes('captcha') || widget) {
+        return {
+          status: 'captcha',
+          message: 'captcha GOG sur la page du code',
+          url: `https://www.gog.com/redeem/${encodeURIComponent(code)}`,
+        };
       }
       if (reasons.includes('code_used')) return { status: 'owned', message: 'clé déjà utilisée' };
       if (reasons.includes('code_not_found')) return { status: 'error', message: 'clé inconnue' };

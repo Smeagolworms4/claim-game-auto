@@ -237,6 +237,12 @@ async function redeemKey(key) {
       });
       if (done) {
         klog.info('🔑 clé activée:', key.title);
+      } else if (res.status === 'captcha') {
+        // Notification + lien qui ouvre le VNC sur la page du code.
+        klog.warn(`captcha sur l'activation de ${key.title}`);
+        await attention
+          .request(key.target, 'captcha', `activation de la clé ${key.title}`, res.url || redeemUrl(key.target, key.code))
+          .catch((err) => klog.warn(err.message));
       } else {
         klog.warn(`clé ${key.title} → ${res.status}${res.message ? ` (${res.message})` : ''}`);
         // Clé non activable automatiquement : on l'envoie avec le lien du store

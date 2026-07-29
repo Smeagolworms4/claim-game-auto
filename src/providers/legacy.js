@@ -66,6 +66,14 @@ export default {
 
     const body = (await page.locator('body').innerText().catch(() => '')) || '';
     log.debug('réponse:', body.replace(/\s+/g, ' ').slice(0, 150));
+    // Chaque jeu a sa page promo : sans elle, la page générique n'a pas le bon
+    // formulaire. On renvoie vers les instructions Amazon, qui la référencent.
+    if (url === REDEEM && entry.url) {
+      return {
+        status: 'manual',
+        message: `page promo du jeu à récupérer dans les instructions Amazon : ${entry.url.replace(/\?.*$/, '')}/details`,
+      };
+    }
     if (/thank you|success|check your email|merci/i.test(body)) {
       return { status: 'claimed', message: 'lien de téléchargement envoyé par e-mail' };
     }
