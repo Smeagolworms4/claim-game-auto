@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>claim-auto</title>
+<link rel="stylesheet" href="/vendor/css/materialdesignicons.min.css" />
+<link rel="stylesheet" href="/vendor/vuetify.css" />
+<style>
+  html { overflow-y: auto; }
+  .logbox { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+            max-height: 340px; overflow-y: auto; background: #0d1117; }
+  .logbox .l-warn { color: #f0b849; }
+  .logbox .l-error { color: #f4776b; }
+  .logbox .l-scope { color: #7aa2f7; margin: 0 .6em; }
+  .logbox .l-ts { color: #6b7684; }
+  .offer-list { max-height: 420px; overflow-y: auto; }
+  .vnc-frame { width: 100%; height: calc(100vh - 64px); border: 0; background: #000; }
+</style>
+</head>
+<body>
+<div id="app">
+<v-app>
+  <v-app-bar density="comfortable" color="surface" flat border>
+    <v-app-bar-title>
+      <span class="font-weight-bold">claim</span><span class="text-primary font-weight-bold">-auto</span>
+    </v-app-bar-title>
+
+    <v-chip size="small" variant="tonal" class="mr-2" prepend-icon="mdi-clock-outline">
+      {{ status.schedule ? status.schedule.cron : '—' }}
+    </v-chip>
+    <v-chip size="small" class="mr-2" :color="status.busy ? 'warning' : 'success'" variant="tonal"
+            :prepend-icon="status.busy ? 'mdi-progress-clock' : 'mdi-check-circle-outline'">
+      {{ status.busy ? busyLabel : 'inactif' }}
+    </v-chip>
+    <v-chip size="small" variant="tonal" class="mr-4" prepend-icon="mdi-gamepad-variant-outline">
+      {{ status.stats ? status.stats.total : 0 }} réclamé(s)
+    </v-chip>
+
+    <v-btn variant="tonal" class="mr-2" prepend-icon="mdi-magnify"
+           :disabled="status.busy" @click="detect()">Détecter</v-btn>
+    <v-btn color="primary" variant="flat" class="mr-2" prepend-icon="mdi-gift-outline"
+           :disabled="status.busy" @click="run()">Tout réclamer</v-btn>
+    <v-btn variant="text" icon="mdi-cog-outline" class="mr-2" title="Réglages"
+           @click="openSettings()"></v-btn>
+  </v-app-bar>
+
+  <v-main>
+    <v-progress-linear v-if="status.busy" indeterminate color="primary"></v-progress-linear>
+
+    <v-container fluid>
+      <v-row>
+        <v-col v-for="p in status.providers" :key="p.name" cols="12" md="6" lg="3">
+          <v-card border>
+            <v-card-item>
+              <v-card-title class="d-flex align-center ga-2">
+                <v-icon :icon="icons[p.name] || 'mdi-controller'" size="small"></v-icon>
+                <span class="text-subtitle-1">{{ p.label }}</span>
+                <v-spacer></v-spacer>
+                <v-chip size="x-small" variant="text" class="text-medium-emphasis">{{ p.browser }}</v-chip>
+                <v-chip size="x-small" variant="tonal" :color="loginColor(p)">{{ loginLabel(p) }}</v-chip>
+              </v-card-title>
+            </v-card-item>
+
+            <v-card-actions class="px-4 pt-0">
+              <v-btn size="small" variant="text" :disabled="status.busy" @click="detect(p.name)">Détecter</v-btn>
+              <v-btn size="small" variant="text" :disabled="status.busy" @click="run(p.name)">Réclamer</v-btn>
+              <v-spacer></v-spacer>
+              <v-btn size="small" variant="text" icon="mdi-cookie-outline"
+                     :disabled="status.busy" title="Importer des cookies"
+                     @click="openCookies(p)"></v-btn>
+              <v-btn size="small" variant="tonal" prepend-icon="mdi-monitor-lock"
+                     :disabled="status.busy" @click="login(p.name)">Connexion</v-btn>
+            </v-card-actions>
+
+            <v-divider></v-divider>
+
+            <v-list v-if="offers(p).length" density="compact" lines="two" class="py-0 offer-list">
+              <v-list-item v-for="o in offers(p)" :key="o.id" :href="o.url" target="_blank">
+                <v-list-item-title class="text-body-2">{{ o.title }}</v-list-item-title>
+                <v-list-item-subtitle v-if="o.endsAt || o.code">
+                  <span v-if="o.endsAt">jusqu'au {{ date(o.endsAt) }}</span>
+                  <code v-if="o.code" class="ml-1">{{ o.code }}</code>
+                </v-list-item-subtitle>
+                <template #append>
+                  <v-chip size="x-small" variant="tonal" :color="statusColor(o.status)">
+                    {{ statusLabel(o) }}
+                  </v-chip>
+                </template>
+              </v-list-item>
+            </v-list>
+            <v-card-text v-else class="text-medium-emphasis text-body-2">
+              {{ p.detected ? 'Aucune offre gratuite en ce moment.' : 'Pas encore analysé.' }}
+            </v-card-text>
+          </v-card>
+        </v-col>
+      </v-row>
+
+      <!-- Clés Prime à activer sur GOG / Legacy / Epic -->
+      <v-row v-if="keys.length">
+        <v-col cols="12">
+          <v-card border>
+            <v-toolbar density="compact" color="surface">
+              <v-icon class="ml-4" icon="mdi-key-variant"></v-icon>
+              <v-toolbar-title class="text-subtitle-2 ml-2">Clés à activer</v-toolbar-title>
+              <v-spacer></v-spacer>
+              <v-btn size="small" variant="tonal" class="mr-3" prepend-icon="mdi-key-arrow-right"
+                     :disabled="status.busy || !status.pendingKeys" @click="redeemKeys()">
+                Activer ({{ status.pendingKeys || 0 }})
+              </v-btn>
+            </v-toolbar>
+            <!-- v-data-table plutôt que v-table : dans un template in-DOM, le
+                 parser HTML déplacerait des <tr>/<td> écrits à la main. -->
+            <v-data-table :headers="keyHeaders" :items="keys" density="compact"
+                          items-per-page="10" hide-default-footer>
+              <template #item.target="{ item }">
+                <v-chip size="x-small" variant="tonal">{{ item.target || 'inconnu' }}</v-chip>
+              </template>
+              <template #item.code="{ item }">
+                <code>{{ item.code }}</code>
+                <v-btn size="x-small" variant="text" icon="mdi-content-copy" class="ml-1"
+                       title="Copier la clé" @click="copy(item.code)"></v-btn>
+                <v-btn v-if="redeemUrl(item.target)" size="x-small" variant="text"
+                       icon="mdi-open-in-new" class="ml-1" :href="redeemUrl(item.target)"
+                       target="_blank" title="Ouvrir la page d'activation"></v-btn>
+              </template>
+              <template #item.status="{ item }">
+                <v-chip size="x-small" variant="tonal" :color="keyColor(item.status)">
+                  {{ item.status }}
+                </v-chip>
+                <span v-if="item.message" class="text-medium-emphasis text-caption ml-2">
+                  {{ item.message }}
+                </span>
+              </template>
+            </v-data-table>
+          </v-card>
+        </v-col>
+      </v-row>
+
+      <v-row>
+        <v-col cols="12" lg="7">
+          <v-card border>
+            <v-toolbar density="compact" color="surface">
+              <v-toolbar-title class="text-subtitle-2">Journal</v-toolbar-title>
+              <v-spacer></v-spacer>
+              <v-switch v-model="autoScroll" hide-details density="compact" label="Suivre"
+                        color="primary" class="mr-4"></v-switch>
+            </v-toolbar>
+            <div class="logbox pa-3" ref="logbox">
+              <div v-for="(l, i) in logs" :key="i" :class="'l-' + l.level">
+                <span class="l-ts">{{ l.ts.slice(11) }}</span><span class="l-scope">{{ l.scope || '-' }}</span>{{ l.message }}
+              </div>
+            </div>
+          </v-card>
+        </v-col>
+
+        <v-col cols="12" lg="5">
+          <v-card border>
+            <v-toolbar density="compact" color="surface">
+              <v-toolbar-title class="text-subtitle-2">Historique</v-toolbar-title>
+              <v-spacer></v-spacer>
+              <v-chip size="x-small" variant="tonal" class="mr-3">{{ history.length }}</v-chip>
+            </v-toolbar>
+            <v-list v-if="history.length" density="compact" lines="two"
+                    style="max-height: 340px; overflow-y: auto">
+              <v-list-item v-for="(h, i) in history" :key="i">
+                <template #prepend>
+                  <v-icon size="small" :color="statusColor(h.status)"
+                          :icon="icons[h.provider] || 'mdi-controller'"></v-icon>
+                </template>
+                <v-list-item-title class="text-body-2">{{ h.title }}</v-list-item-title>
+                <v-list-item-subtitle>
+                  {{ datetime(h.at) }}<span v-if="h.message"> · {{ h.message }}</span>
+                </v-list-item-subtitle>
+                <template #append>
+                  <v-chip size="x-small" variant="tonal" :color="statusColor(h.status)">
+                    {{ statusLabel(h) }}
+                  </v-chip>
+                </template>
+              </v-list-item>
+            </v-list>
+            <v-card-text v-else class="text-medium-emphasis text-body-2">
+              Rien encore — l'historique se remplit au premier claim.
+            </v-card-text>
+          </v-card>
+        </v-col>
+      </v-row>
+    </v-container>
+  </v-main>
+
+  <!-- Session de connexion : Chrome affiché en VNC, coupé dès que c'est fini -->
+  <v-dialog v-model="vncOpen" fullscreen :scrim="false" transition="dialog-bottom-transition">
+    <v-card>
+      <v-toolbar density="comfortable" color="surface">
+        <v-icon class="ml-4" icon="mdi-monitor-lock"></v-icon>
+        <v-toolbar-title class="text-subtitle-1">
+          Connexion — {{ vncLabel }}
+        </v-toolbar-title>
+        <span class="text-medium-emphasis text-body-2 d-none d-md-block">
+          Connecte-toi dans le navigateur, puis clique « J'ai fini » : le VNC se coupe et tout repasse en headless.
+        </span>
+        <v-spacer></v-spacer>
+        <v-btn variant="text" @click="closeVnc()">Fermer</v-btn>
+        <v-btn color="primary" variant="flat" class="mr-2" :loading="finishing"
+               prepend-icon="mdi-check" @click="finishLogin()">J'ai fini</v-btn>
+      </v-toolbar>
+      <iframe v-if="vncOpen" class="vnc-frame" :src="vncSrc"></iframe>
+    </v-card>
+  </v-dialog>
+
+  <!-- Import de cookies : contourne les challenges Cloudflare/Google en
+       apportant une session ouverte depuis son propre navigateur -->
+  <v-dialog v-model="cookieOpen" max-width="760">
+    <v-card>
+      <v-card-title class="d-flex align-center ga-2">
+        <v-icon icon="mdi-cookie-outline"></v-icon>
+        Importer les cookies — {{ cookieProvider.label }}
+      </v-card-title>
+      <v-card-text>
+        <p class="text-body-2 text-medium-emphasis mb-3">
+          Utile si le VNC se fait bloquer par un captcha en boucle. Connecte-toi à
+          <strong>{{ cookieProvider.label }}</strong> dans ton navigateur habituel, exporte les
+          cookies du site avec une extension type <em>Cookie-Editor</em> (bouton « Export » →
+          JSON), et colle-les ici. Un simple <code>nom=valeur; nom2=valeur2</code> fonctionne aussi.
+        </p>
+        <v-textarea v-model="cookieText" rows="9" variant="outlined" density="compact"
+                    placeholder='[{"name":"...","value":"...","domain":".exemple.com", ...}]'
+                    hide-details></v-textarea>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer></v-spacer>
+        <v-btn variant="text" @click="cookieOpen = false">Annuler</v-btn>
+        <v-btn color="primary" variant="flat" :loading="cookieBusy"
+               :disabled="!cookieText.trim()" @click="sendCookies()">Importer</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <!-- Réglages : persistés côté serveur, appliqués à chaud -->
+  <v-dialog v-model="setOpen" max-width="900" scrollable>
+    <v-card>
+      <v-card-title class="d-flex align-center ga-2">
+        <v-icon icon="mdi-cog-outline"></v-icon> Réglages
+      </v-card-title>
+      <v-card-text>
+        <div class="text-overline mb-1">Notifications envoyées</div>
+        <v-select v-model="set.notifyEvents" :items="notifyKinds" item-title="label" item-value="key"
+                  multiple chips variant="outlined" density="compact"
+                  :disabled="isForced('notifyEvents')" :hint="forcedHint('notifyEvents')" persistent-hint></v-select>
+
+        <div class="text-overline mb-1">Lien public (pour les liens de déblocage)</div>
+        <v-text-field v-model="set.publicUrl" variant="outlined" density="compact"
+                      placeholder="https://claim.mondomaine.fr" class="mb-4"
+                      :disabled="isForced('publicUrl')" :hint="forcedHint('publicUrl')" persistent-hint></v-text-field>
+
+        <div class="text-overline mb-1">Canaux</div>
+        <v-row dense>
+          <v-col cols="12" md="6"><v-text-field v-model="set.discordWebhook" :disabled="isForced('discordWebhook')" :hint="forcedHint('discordWebhook')" persistent-hint label="Webhook Discord"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.slackWebhook" :disabled="isForced('slackWebhook')" :hint="forcedHint('slackWebhook')" persistent-hint label="Webhook Slack"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.telegramToken" :disabled="isForced('telegramToken')" :hint="forcedHint('telegramToken')" persistent-hint label="Token bot Telegram"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.telegramChatId" :disabled="isForced('telegramChatId')" :hint="forcedHint('telegramChatId')" persistent-hint label="Chat ID Telegram"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.ntfyTopic" :disabled="isForced('ntfyTopic')" :hint="forcedHint('ntfyTopic')" persistent-hint label="Topic ntfy"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.ntfyServer" :disabled="isForced('ntfyServer')" :hint="forcedHint('ntfyServer')" persistent-hint label="Serveur ntfy"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.freeMobileUser" :disabled="isForced('freeMobileUser')" :hint="forcedHint('freeMobileUser')" persistent-hint label="SMS Free Mobile — identifiant"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.freeMobilePass" :disabled="isForced('freeMobilePass')" :hint="forcedHint('freeMobilePass')" persistent-hint label="SMS Free Mobile — clé"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+        </v-row>
+
+        <div class="text-overline mt-4 mb-1">Webhook générique (SMS, Gotify, Home Assistant…)</div>
+        <v-row dense>
+          <v-col cols="12" md="8"><v-text-field v-model="set.webhookUrl" :disabled="isForced('webhookUrl')" :hint="forcedHint('webhookUrl')" persistent-hint label="URL"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+          <v-col cols="12" md="4"><v-select v-model="set.webhookMethod" :disabled="isForced('webhookMethod')" :hint="forcedHint('webhookMethod')" persistent-hint :items="['POST','PUT','GET']"
+            label="Méthode" variant="outlined" density="compact" hide-details></v-select></v-col>
+          <v-col cols="12"><v-text-field v-model="set.webhookTemplate" :disabled="isForced('webhookTemplate')" :hint="forcedHint('webhookTemplate')" persistent-hint label="Gabarit ({{title}}, {{text}})"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+        </v-row>
+
+        <div class="text-overline mt-4 mb-1">Navigateur par store</div>
+        <v-row dense>
+          <v-col v-for="n in (setAvailable || [])" :key="n" cols="6" md="3">
+            <v-select :model-value="set.browserPerProvider[n] || ''" :items="browserChoices"
+                      :label="n" variant="outlined" density="compact"
+                      :disabled="!!browserForced(n)"
+                      :hint="browserForced(n) ? 'Verrouillé : imposé par ' + browserForced(n) : ''"
+                      persistent-hint
+                      @update:model-value="v => set.browserPerProvider[n] = v"></v-select>
+          </v-col>
+        </v-row>
+
+        <div class="text-overline mt-4 mb-1">Divers</div>
+        <v-row dense>
+          <v-col cols="12" md="6"><v-text-field v-model="set.cron" :disabled="isForced('cron')"
+            :hint="forcedHint('cron') || 'Claim automatique'" persistent-hint label="Planification du claim (cron)"
+            variant="outlined" density="compact"></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.cronDetect" :disabled="isForced('cronDetect')"
+            :hint="forcedHint('cronDetect') || 'Rafraîchissement de la liste (vide = désactivé)'" persistent-hint
+            label="Planification du rafraîchissement (cron)"
+            variant="outlined" density="compact"></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.legacyEmail" :disabled="isForced('legacyEmail')" :hint="forcedHint('legacyEmail')" persistent-hint label="E-mail Legacy Games"
+            variant="outlined" density="compact" hide-details></v-text-field></v-col>
+        </v-row>
+        <v-switch v-model="set.dryRun" color="primary" density="compact" :disabled="isForced('dryRun')" :hint="forcedHint('dryRun')" persistent-hint
+                  label="Simulation (ne rien réclamer)"></v-switch>
+        <v-switch v-model="set.autoRedeemKeys" color="primary" density="compact" :disabled="isForced('autoRedeemKeys')" :hint="forcedHint('autoRedeemKeys')" persistent-hint
+                  label="Activer les clés automatiquement"></v-switch>
+        <v-switch v-model="set.primeClaimLoot" color="primary" density="compact" :disabled="isForced('primeClaimLoot')" :hint="forcedHint('primeClaimLoot')" persistent-hint
+                  label="Réclamer aussi le loot in-game Prime"></v-switch>
+        <v-switch v-model="set.notifyOnNothing" color="primary" density="compact" :disabled="isForced('notifyOnNothing')" :hint="forcedHint('notifyOnNothing')" persistent-hint
+                  label="Notifier même sans nouveauté"></v-switch>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer></v-spacer>
+        <v-btn variant="text" @click="setOpen = false">Annuler</v-btn>
+        <v-btn color="primary" variant="flat" :loading="setBusy" @click="saveSettings()">Enregistrer</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-snackbar v-model="snack.show" :color="snack.color" timeout="5000">{{ snack.text }}</v-snackbar>
+</v-app>
+</div>
+
+<script src="/vendor/vue.js"></script>
+<script src="/vendor/vuetify.js"></script>
+<script>
+const api = async (path, body) => {
+  const res = await fetch(path, body !== undefined
+    ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+    : {});
+  return res.json().catch(() => ({}));
+};
+
+const STATUS = {
+  claimed:  ['réclamé',        'success'],
+  owned:    ['déjà possédé',   'grey'],
+  'dry-run':['dry-run',        'info'],
+  captcha:  ['captcha',        'warning'],
+  manual:   ['action manuelle','warning'],
+  unknown:  ['à vérifier',     'warning'],
+  skipped:  ['ignoré',         'grey'],
+  error:    ['erreur',         'error'],
+};
+
+const app = Vue.createApp({
+  data: () => ({
+    status: { providers: [], stats: { total: 0 }, schedule: null, busy: false },
+    logs: [],
+    history: [],
+    keys: [],
+    keyHeaders: [
+      { title: 'Jeu', key: 'title' },
+      { title: 'Source', key: 'from' },
+      { title: 'À activer sur', key: 'target' },
+      { title: 'Clé', key: 'code' },
+      { title: 'État', key: 'status' },
+    ],
+    autoScroll: true,
+    setOpen: false,
+    setBusy: false,
+    set: { browserPerProvider: {}, notifyEvents: [] },
+    setAvailable: [],
+    setForced: {},
+    notifyKinds: [
+      { key: 'claim', label: 'Résultat du claim automatique' },
+      { key: 'failure', label: 'Échec du claim / clé à activer à la main' },
+      { key: 'captcha', label: 'Demande de captcha (lien de déblocage)' },
+      { key: 'available', label: 'Liste des jeux disponibles' },
+    ],
+    browserChoices: [
+      { title: 'défaut', value: '' },
+      { title: 'chrome', value: 'chrome' },
+      { title: 'chromium', value: 'chromium' },
+      { title: 'firefox', value: 'firefox' },
+    ],
+    cookieOpen: false,
+    cookieProvider: {},
+    cookieText: '',
+    cookieBusy: false,
+    vncOpen: false,
+    vncLabel: '',
+    vncSrc: '',
+    finishing: false,
+    snack: { show: false, text: '', color: 'info' },
+    icons: {
+      // MDI v7 a retiré la plupart des logos de marques : on reste sur des
+      // icônes génériques, seul mdi-steam subsiste.
+      epic: 'mdi-alpha-e-box-outline',
+      steam: 'mdi-steam',
+      gog: 'mdi-alpha-g-box-outline',
+      prime: 'mdi-alpha-a-box-outline',
+    },
+  }),
+
+  computed: {
+    busyLabel() {
+      const what = this.status.current && this.status.current.what;
+      return what ? what.replace('login:', 'connexion ') : 'en cours';
+    },
+  },
+
+  methods: {
+    offers: (p) => (p.detected && p.detected.offers) || [],
+    date: (s) => new Date(s).toLocaleDateString('fr-FR'),
+    datetime: (s) => new Date(s).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }),
+    statusLabel(o) {
+      const s = STATUS[o.status];
+      if (s) return s[0];
+      return o.claimedBefore ? 'déjà traité' : 'détecté';
+    },
+    statusColor: (st) => (STATUS[st] ? STATUS[st][1] : 'primary'),
+    loginLabel: (p) => (!p.detected ? 'inconnu' : p.detected.loggedIn ? 'connecté' : 'non connecté'),
+    loginColor: (p) => (!p.detected ? 'grey' : p.detected.loggedIn ? 'success' : 'error'),
+
+    toast(text, color = 'info') {
+      this.snack = { show: true, text, color };
+    },
+
+    async refresh() {
+      this.status = await api('/api/status');
+      if (this.status.login && this.status.login.active && !this.vncOpen) {
+        this.openVnc(this.status.login.label);
+      }
+    },
+
+    async loadHistory() {
+      this.history = (await api('/api/history?limit=100')).entries || [];
+    },
+
+    async loadKeys() {
+      this.keys = (await api('/api/keys')).keys || [];
+    },
+
+    keyColor: (st) => ({ redeemed: 'success', pending: 'info', manual: 'warning', error: 'error' }[st] || 'grey'),
+
+    redeemUrl: (target) => ({
+      gog: 'https://www.gog.com/redeem',
+      steam: 'https://store.steampowered.com/account/registerkey',
+      epic: 'https://store.epicgames.com/redeem',
+      legacy: 'https://legacygames.com/primedeal',
+      microsoft: 'https://account.microsoft.com/billing/redeem',
+    }[target] || null),
+
+    async copy(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        this.toast('Clé copiée.');
+      } catch {
+        this.toast('Copie impossible — sélectionne la clé à la main.', 'warning');
+      }
+    },
+
+    isForced(key) {
+      return Boolean(this.setForced[key]);
+    },
+
+    forcedHint(key) {
+      const env = this.setForced[key];
+      return env ? `Verrouillé : imposé par ${env} dans .env` : '';
+    },
+
+    browserForced(provider) {
+      return (this.setForced.browserPerProvider || {})[provider] || '';
+    },
+
+    async openSettings() {
+      const r = await api('/api/settings');
+      this.setForced = r.forced || {};
+      this.set = {
+        ...r.settings,
+        browserPerProvider: { ...(r.settings.browserPerProvider || {}) },
+        notifyEvents: [...(r.settings.notifyEvents || [])],
+      };
+      this.setAvailable = r.available || [];
+      this.setOpen = true;
+    },
+
+    async saveSettings() {
+      this.setBusy = true;
+      // Un moteur vide = « défaut » : on ne l'enregistre pas.
+      const browsers = Object.fromEntries(
+        Object.entries(this.set.browserPerProvider).filter(([, v]) => v),
+      );
+      const r = await api('/api/settings', { ...this.set, browserPerProvider: browsers });
+      this.setBusy = false;
+      if (r.error) return this.toast(r.error, 'error');
+      this.setOpen = false;
+      this.toast('Réglages enregistrés.', 'success');
+      this.refresh();
+    },
+
+    openCookies(p) {
+      this.cookieProvider = p;
+      this.cookieText = '';
+      this.cookieOpen = true;
+    },
+
+    async sendCookies() {
+      this.cookieBusy = true;
+      const r = await api('/api/cookies/import', {
+        provider: this.cookieProvider.name,
+        cookies: this.cookieText,
+      });
+      this.cookieBusy = false;
+      if (r.error) return this.toast(r.error, 'error');
+      this.cookieOpen = false;
+      this.toast(
+        r.loggedIn
+          ? `${r.imported} cookie(s) importé(s) — session ${this.cookieProvider.label} reconnue.`
+          : `${r.imported} cookie(s) importé(s), mais la session n'est pas reconnue.`,
+        r.loggedIn ? 'success' : 'warning',
+      );
+      this.refresh();
+    },
+
+    async redeemKeys() {
+      await api('/api/keys/redeem', {});
+      this.toast('Activation des clés en cours…');
+      this.refresh();
+    },
+
+    async detect(provider) {
+      await api('/api/detect', provider ? { provider } : {});
+      this.toast(provider ? `Détection ${provider}…` : 'Détection en cours…');
+      this.refresh();
+    },
+
+    async run(provider) {
+      await api('/api/run', provider ? { provider } : {});
+      this.toast(provider ? `Claim ${provider}…` : 'Claim en cours…');
+      this.refresh();
+    },
+
+    async login(provider) {
+      const r = await api('/api/login/start', { provider });
+      if (r.error) return this.toast(r.error, 'error');
+      this.openVnc(r.label);
+      this.refresh();
+    },
+
+    openVnc(label) {
+      this.vncLabel = label || '';
+      // noVNC est proxifié par ce serveur : même origine, même port.
+      this.vncSrc = '/vnc/vnc.html?autoconnect=1&resize=scale&reconnect=1';
+      this.vncOpen = true;
+      this.keepAlive = setInterval(() => api('/api/login/keepalive', {}), 60000);
+    },
+
+    closeVnc() {
+      clearInterval(this.keepAlive);
+      this.vncOpen = false;
+      this.vncSrc = '';
+    },
+
+    async finishLogin() {
+      this.finishing = true;
+      const r = await api('/api/login/finish', {});
+      this.finishing = false;
+      this.closeVnc();
+      this.toast(
+        r.loggedIn ? `Connecté à ${r.provider} — VNC coupé, retour en headless.`
+                   : `Toujours pas connecté à ${r.provider}, réessaie.`,
+        r.loggedIn ? 'success' : 'warning',
+      );
+      this.refresh();
+    },
+
+    pushLog(line) {
+      this.logs.push(line);
+      if (this.logs.length > 500) this.logs.shift();
+      if (!this.autoScroll) return;
+      this.$nextTick(() => {
+        const box = this.$refs.logbox;
+        if (box) box.scrollTop = box.scrollHeight;
+      });
+    },
+  },
+
+  async mounted() {
+    this.refresh();
+    this.loadHistory();
+    this.loadKeys();
+    (await api('/api/logs')).lines?.forEach(this.pushLog);
+
+    const es = new EventSource('/api/events');
+    es.addEventListener('log', (e) => this.pushLog(JSON.parse(e.data)));
+    es.addEventListener('lock', () => {
+      this.refresh();
+      this.loadKeys();
+    });
+    es.addEventListener('run', () => {
+      this.refresh();
+      this.loadHistory();
+      this.loadKeys();
+    });
+
+    setInterval(() => this.refresh(), 15000);
+  },
+});
+
+app.use(Vuetify.createVuetify({
+  theme: {
+    defaultTheme: 'dark',
+    themes: { dark: { colors: { primary: '#6ee7a8', surface: '#171b21', background: '#0f1216' } } },
+  },
+  defaults: { VCard: { rounded: 'lg' } },
+}));
+app.mount('#app');
+</script>
+</body>
+</html>

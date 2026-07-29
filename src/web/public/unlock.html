@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>claim-auto — déblocage</title>
+<link rel="stylesheet" href="/vendor/css/materialdesignicons.min.css" />
+<link rel="stylesheet" href="/vendor/vuetify.css" />
+<style>
+  html { overflow: hidden; }
+  .vnc-frame { width: 100%; height: calc(100vh - 64px); border: 0; background: #000; }
+</style>
+</head>
+<body>
+<div id="app">
+<v-app>
+  <v-app-bar density="comfortable" color="surface" flat border>
+    <v-icon class="ml-4" icon="mdi-lock-open-variant-outline"></v-icon>
+    <v-app-bar-title class="ml-2">
+      Déblocage — {{ info.label || info.provider || '…' }}
+    </v-app-bar-title>
+    <span class="text-medium-emphasis text-body-2 d-none d-md-block">{{ hint }}</span>
+    <v-spacer></v-spacer>
+    <v-btn v-if="ready" color="primary" variant="flat" class="mr-4" :loading="finishing"
+           prepend-icon="mdi-check" @click="finish()">C'est débloqué</v-btn>
+  </v-app-bar>
+
+  <v-main>
+    <v-alert v-if="error" type="error" variant="tonal" class="ma-6">{{ error }}</v-alert>
+
+    <div v-else-if="!ready" class="d-flex flex-column align-center justify-center"
+         style="height: 60vh; gap: 16px">
+      <v-progress-circular indeterminate color="primary" size="42"></v-progress-circular>
+      <span class="text-medium-emphasis">Ouverture du navigateur distant…</span>
+    </div>
+
+    <iframe v-else class="vnc-frame" :src="vncSrc"></iframe>
+
+    <v-snackbar v-model="snack.show" :color="snack.color" timeout="6000">{{ snack.text }}</v-snackbar>
+  </v-main>
+</v-app>
+</div>
+
+<script src="/vendor/vue.js"></script>
+<script src="/vendor/vuetify.js"></script>
+<script>
+const token = location.pathname.split('/').filter(Boolean).pop();
+const api = async (path, body) => {
+  const res = await fetch(path, body !== undefined
+    ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+    : {});
+  return res.json().catch(() => ({}));
+};
+
+const app = Vue.createApp({
+  data: () => ({
+    info: {},
+    ready: false,
+    finishing: false,
+    error: '',
+    vncSrc: '',
+    snack: { show: false, text: '', color: 'info' },
+  }),
+
+  computed: {
+    hint() {
+      if (!this.ready) return '';
+      return "Résous le blocage dans le navigateur, puis clique « C'est débloqué » : le VNC se coupe et le claim reprend.";
+    },
+  },
+
+  methods: {
+    async finish() {
+      this.finishing = true;
+      const r = await api(`/api/unlock/${token}/finish`, {});
+      this.finishing = false;
+      if (r.error) {
+        this.snack = { show: true, text: r.error, color: 'error' };
+        return;
+      }
+      this.ready = false;
+      this.vncSrc = '';
+      this.snack = {
+        show: true,
+        color: r.loggedIn ? 'success' : 'warning',
+        text: r.loggedIn
+          ? `Session ${r.provider} reconnue — le claim repart automatiquement.`
+          : `Session ${r.provider} toujours pas reconnue. Tu peux relancer le déblocage.`,
+      };
+    },
+  },
+
+  async mounted() {
+    const r = await api(`/api/unlock/${token}/start`, {});
+    if (r.error) {
+      this.error = r.error;
+      return;
+    }
+    this.info = r;
+    this.vncSrc = '/vnc/vnc.html?autoconnect=1&resize=scale&reconnect=1';
+    this.ready = true;
+    setInterval(() => api(`/api/unlock/${token}/keepalive`, {}), 60000);
+  },
+});
+
+app.use(Vuetify.createVuetify({
+  theme: {
+    defaultTheme: 'dark',
+    themes: { dark: { colors: { primary: '#6ee7a8', surface: '#171b21', background: '#0f1216' } } },
+  },
+}));
+app.mount('#app');
+</script>
+</body>
+</html>

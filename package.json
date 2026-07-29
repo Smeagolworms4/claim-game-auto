@@ -1,0 +1,24 @@
+{
+  "name": "claim-auto",
+  "version": "1.0.0",
+  "description": "Claim automatique des jeux gratuits Epic / Steam / GOG / Prime Gaming (Luna)",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js daemon",
+    "run:once": "node src/index.js run",
+    "login": "node src/index.js login",
+    "status": "node src/index.js status"
+  },
+  "dependencies": {
+    "@mdi/font": "^7.4.47",
+    "croner": "^10.0.1",
+    "dotenv": "^16.4.5",
+    "playwright": "1.62.0",
+    "vue": "^3.5.13",
+    "vuetify": "^3.7.6"
+  }
+}
