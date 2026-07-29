@@ -114,6 +114,13 @@ export function formatReport(results) {
     claimed += r.claimed.length;
     if (r.claimed.length) lines.push(`${head} — ${r.claimed.map((g) => `✅ ${g.title}`).join(', ')}`);
     else lines.push(`${head} — rien de nouveau (${r.seen} offre(s) vues)`);
+
+    // Ce qui n'a pas pu être pris automatiquement : on donne le lien pour le
+    // faire à la main.
+    for (const o of r.offers || []) {
+      if (!['captcha', 'manual', 'unknown', 'error'].includes(o.status)) continue;
+      lines.push(`   ⚠️ ${o.title} (${o.status}) — à réclamer à la main : ${o.url}`);
+    }
   }
 
   return { claimed, errors, body: lines.join('\n') || 'Aucun provider exécuté.' };

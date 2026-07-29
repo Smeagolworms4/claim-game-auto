@@ -44,6 +44,8 @@
            :disabled="status.busy" @click="detect()">Détecter</v-btn>
     <v-btn color="primary" variant="flat" class="mr-2" prepend-icon="mdi-gift-outline"
            :disabled="status.busy" @click="run()">Tout réclamer</v-btn>
+    <v-btn v-if="status.busy && !status.login?.active" color="error" variant="tonal" class="mr-2"
+           prepend-icon="mdi-stop-circle-outline" @click="stop()">Arrêter</v-btn>
     <v-btn variant="text" icon="mdi-cog-outline" class="mr-2" title="Réglages"
            @click="openSettings()"></v-btn>
   </v-app-bar>
@@ -64,8 +66,12 @@
           <v-spacer></v-spacer>
           <v-btn color="warning" variant="flat" size="small" prepend-icon="mdi-monitor-lock"
                  :disabled="status.busy" @click="unlock(a)">Débloquer dans le VNC</v-btn>
+          <v-btn v-if="a.url" variant="text" size="small" :href="a.url" target="_blank"
+                 prepend-icon="mdi-open-in-new">Faire à la main</v-btn>
           <v-btn variant="text" size="small" :href="'/unlock/' + a.token" target="_blank"
-                 prepend-icon="mdi-open-in-new">Lien</v-btn>
+                 prepend-icon="mdi-link-variant">Lien de déblocage</v-btn>
+          <v-btn variant="text" size="small" icon="mdi-close" title="Écarter cette demande"
+                 @click="dismiss(a)"></v-btn>
         </div>
       </v-alert>
 
@@ -105,6 +111,12 @@
                   <v-chip size="x-small" variant="tonal" :color="statusColor(o.status)">
                     {{ statusLabel(o) }}
                   </v-chip>
+                  <v-btn size="x-small" variant="text" icon="mdi-open-in-new" class="ml-1"
+                         :href="o.url" target="_blank" title="Réclamer à la main"
+                         @click.stop></v-btn>
+                  <v-btn v-if="!o.claimedBefore" size="x-small" variant="text" class="ml-1"
+                         icon="mdi-check-circle-outline" title="Marquer comme déjà réclamé"
+                         @click.stop.prevent="markClaimed(p, o)"></v-btn>
                 </template>
               </v-list-item>
             </v-list>
@@ -139,9 +151,9 @@
                 <code>{{ item.code }}</code>
                 <v-btn size="x-small" variant="text" icon="mdi-content-copy" class="ml-1"
                        title="Copier la clé" @click="copy(item.code)"></v-btn>
-                <v-btn v-if="redeemUrl(item.target)" size="x-small" variant="text"
-                       icon="mdi-open-in-new" class="ml-1" :href="redeemUrl(item.target)"
-                       target="_blank" title="Ouvrir la page d'activation"></v-btn>
+                <v-btn v-if="redeemUrl(item.target, item.code)" size="x-small" variant="tonal"
+                       class="ml-1" :href="redeemUrl(item.target, item.code)" target="_blank"
+                       prepend-icon="mdi-key-arrow-right">Activer</v-btn>
               </template>
               <template #item.status="{ item }">
                 <v-chip size="x-small" variant="tonal" :color="keyColor(item.status)">
@@ -241,6 +253,9 @@
           <strong>{{ cookieProvider.label }}</strong> dans ton navigateur habituel, exporte les
           cookies du site avec une extension type <em>Cookie-Editor</em> (bouton « Export » →
           JSON), et colle-les ici. Un simple <code>nom=valeur; nom2=valeur2</code> fonctionne aussi.
+          L'export doit contenir le cookie de session du store
+          (<code>gog-al</code>, <code>EPIC_SSO</code>, <code>steamLoginSecure</code>,
+          <code>at-main</code>…), donc exporte bien depuis la page du store en étant connecté.
         </p>
         <v-textarea v-model="cookieText" rows="9" variant="outlined" density="compact"
                     placeholder='[{"name":"...","value":"...","domain":".exemple.com", ...}]'
@@ -447,13 +462,24 @@ const app = Vue.createApp({
 
     keyColor: (st) => ({ redeemed: 'success', pending: 'info', manual: 'warning', error: 'error' }[st] || 'grey'),
 
-    redeemUrl: (target) => ({
-      gog: 'https://www.gog.com/redeem',
-      steam: 'https://store.steampowered.com/account/registerkey',
-      epic: 'https://store.epicgames.com/redeem',
-      legacy: 'https://legacygames.com/primedeal',
-      microsoft: 'https://account.microsoft.com/billing/redeem',
-    }[target] || null),
+    // Lien pré-rempli avec la clé quand le store l'accepte : un clic et c'est
+    // activé, sans copier-coller. Legacy Games exige un formulaire e-mail + clé.
+    redeemUrl(target, code) {
+      const c = code ? encodeURIComponent(code) : null;
+      const prefilled = {
+        gog: c && `https://www.gog.com/redeem/${c}`,
+        steam: c && `https://store.steampowered.com/account/registerkey?key=${c}`,
+        epic: c && `https://store.epicgames.com/redeem?code=${c}`,
+        microsoft: c && `https://account.microsoft.com/billing/redeem?code=${c}`,
+      }[target];
+      return prefilled || {
+        gog: 'https://www.gog.com/redeem',
+        steam: 'https://store.steampowered.com/account/registerkey',
+        epic: 'https://store.epicgames.com/redeem',
+        legacy: 'https://legacygames.com/primedeal',
+        microsoft: 'https://account.microsoft.com/billing/redeem',
+      }[target] || null;
+    },
 
     async copy(text) {
       try {
@@ -503,6 +529,27 @@ const app = Vue.createApp({
 
     // Ouvre la modale VNC pilotée par le jeton : « C'est débloqué » relance
     // ensuite le claim de ce store.
+    // « Je l'ai pris à la main » : évite de le retenter et de re-notifier.
+    async markClaimed(p, o) {
+      const r = await api('/api/claimed', { provider: p.name, id: o.id, title: o.title, url: o.url });
+      if (r.error) return this.toast(r.error, 'error');
+      this.toast(`« ${o.title} » marqué comme réclamé.`, 'success');
+      this.refresh();
+      this.loadHistory();
+    },
+
+    async stop() {
+      const r = await api('/api/cancel', {});
+      this.toast(r.cancelled ? 'Arrêt demandé…' : (r.reason || 'rien à arrêter'), 'warning');
+      this.refresh();
+    },
+
+    async dismiss(a) {
+      await api('/api/attention/dismiss', { token: a.token });
+      this.toast('Demande écartée.');
+      this.refresh();
+    },
+
     async unlock(a) {
       const r = await api(`/api/unlock/${a.token}/start`, {});
       if (r.error) return this.toast(r.error, 'error');
@@ -524,11 +571,11 @@ const app = Vue.createApp({
       });
       this.cookieBusy = false;
       if (r.error) return this.toast(r.error, 'error');
-      this.cookieOpen = false;
+      if (r.loggedIn) this.cookieOpen = false;
       this.toast(
         r.loggedIn
           ? `${r.imported} cookie(s) importé(s) — session ${this.cookieProvider.label} reconnue.`
-          : `${r.imported} cookie(s) importé(s), mais la session n'est pas reconnue.`,
+          : r.message || `${r.imported} cookie(s) importé(s), mais la session n'est pas reconnue.`,
         r.loggedIn ? 'success' : 'warning',
       );
       this.refresh();

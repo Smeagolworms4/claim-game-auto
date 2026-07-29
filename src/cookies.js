@@ -14,6 +14,15 @@ const DEFAULT_DOMAIN = {
   legacy: '.legacygames.com',
 };
 
+// Cookie qui porte réellement la session, par store : sans lui, l'import ne
+// servira à rien, autant le dire tout de suite.
+const SESSION_COOKIES = {
+  gog: ['gog-al', 'sessions_gog_com'],
+  epic: ['EPIC_SSO', 'EPIC_SSO_RM', 'EPIC_BEARER_TOKEN'],
+  steam: ['steamLoginSecure'],
+  prime: ['at-main', 'sess-at-main'],
+};
+
 const SAME_SITE = {
   no_restriction: 'None',
   none: 'None',
@@ -96,22 +105,39 @@ export async function importCookies(provider, input) {
   if (!handler) throw new Error(`provider inconnu: ${provider}`);
   const cookies = parseCookies(input, provider);
 
-  return withLock(`cookies:${provider}`, async () =>
+  return withLock(`cookies:${provider}`, async () => {
     // Headless suffit : on ne fait qu'écrire dans le profil.
-    launchContext(provider, { headless: true }).then(async (context) => {
-      try {
-        await context.addCookies(cookies);
-        log.info(`${cookies.length} cookie(s) importé(s) pour ${provider}`);
+    const context = await launchContext(provider, { headless: true });
+    try {
+      await context.addCookies(cookies);
+      log.info(`${cookies.length} cookie(s) importé(s) pour ${provider}`);
 
-        let loggedIn = null;
-        if (typeof handler.isLoggedIn === 'function') {
-          loggedIn = await handler.isLoggedIn(await newPage(context)).catch(() => null);
-        }
-        return { imported: cookies.length, loggedIn };
-      } finally {
-        // Le close() est ce qui écrit le profil sur le volume.
-        await context.close().catch(() => {});
+      // Diagnostic utile : l'export contenait-il le cookie de session ?
+      const expected = SESSION_COOKIES[provider] || [];
+      const names = new Set(cookies.map((c) => c.name));
+      const missingSession = expected.length > 0 && !expected.some((n) => names.has(n));
+      if (missingSession) {
+        log.warn(`aucun cookie de session pour ${provider} — attendu : ${expected.join(' ou ')}`);
       }
-    }),
-  );
+
+      let loggedIn = null;
+      if (typeof handler.isLoggedIn === 'function') {
+        loggedIn = await handler.isLoggedIn(await newPage(context)).catch(() => null);
+      }
+
+      return {
+        imported: cookies.length,
+        loggedIn,
+        missingSession,
+        expected,
+        message: missingSession
+          ? `Aucun cookie de session : il faut ${expected.join(' ou ')}. Exporte depuis la page ` +
+            'du store en étant connecté, avec une extension qui inclut les cookies httpOnly.'
+          : null,
+      };
+    } finally {
+      // Le close() est ce qui écrit le profil sur le volume.
+      await context.close().catch(() => {});
+    }
+  });
 }

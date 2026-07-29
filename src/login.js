@@ -38,9 +38,19 @@ export async function start(name, { url = null } = {}) {
     // Sur un déblocage, on atterrit là où ça a coincé : résoudre le Turnstile
     // sur cette page dépose le cookie cf_clearance dans le profil, ce qui
     // débloque aussi les passages headless suivants.
-    await page.goto(url || provider.loginUrl, { waitUntil: 'domcontentloaded' }).catch((err) => {
-      log.warn('navigation login:', err.message);
-    });
+    if (url) {
+      await page.goto(url, { waitUntil: 'domcontentloaded' }).catch((err) => {
+        log.warn('navigation déblocage:', err.message);
+      });
+    } else if (typeof provider.openLogin === 'function') {
+      // Certains stores (GOG) référencent une URL OAuth qui change : on la fait
+      // produire par le site plutôt que de la coder en dur.
+      await provider.openLogin(page).catch((err) => log.warn('ouverture login:', err.message));
+    } else {
+      await page.goto(provider.loginUrl, { waitUntil: 'domcontentloaded' }).catch((err) => {
+        log.warn('navigation login:', err.message);
+      });
+    }
 
     session = {
       provider: name,

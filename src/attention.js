@@ -76,6 +76,7 @@ export async function request(provider, reason, details = '', url = null) {
     `🔓 ${provider} — intervention requise`,
     [
       `${why}${details ? ` (${details})` : ''}`,
+      url ? `Page concernée (à faire à la main si tu préfères) : ${url}` : '',
       '',
       'Ouvre ce lien pour prendre la main sur le navigateur, débloquer, puis valider :',
       urlFor(token),

@@ -5,12 +5,27 @@ import { withContext, newPage, screenshot } from './browser.js';
 import { getProvider } from './providers/index.js';
 import * as state from './state.js';
 import { notifyEvent, formatReport } from './notify.js';
-import { withLock } from './lock.js';
+import { withLock, isBusy as lockIsBusy } from './lock.js';
 import * as attention from './attention.js';
 
 const log = makeLogger('runner');
 
 export const events = new EventEmitter();
+
+// Annulation : on lève un drapeau (vérifié entre chaque store et chaque offre)
+// et on ferme le contexte courant, ce qui interrompt l'action Playwright en vol.
+let cancelled = false;
+let currentContext = null;
+
+export function cancel() {
+  if (!currentContext && !lockIsBusy()) return { cancelled: false, reason: 'rien en cours' };
+  cancelled = true;
+  log.warn('annulation demandée');
+  currentContext?.close().catch(() => {});
+  return { cancelled: true };
+}
+
+export const isCancelled = () => cancelled;
 
 const CLAIMED_STATUSES = new Set(['claimed']);
 
@@ -27,6 +42,7 @@ async function runProvider(name, { claim = true } = {}) {
   const plog = log.child(name);
 
   return withContext(name, async (context) => {
+    currentContext = context;
     const page = await newPage(context);
     const result = { provider: name, label: provider.label, status: 'ok', offers: [], claimed: [], seen: 0 };
 
@@ -54,6 +70,10 @@ async function runProvider(name, { claim = true } = {}) {
       }
 
       for (const offer of offers) {
+        if (cancelled) {
+          plog.warn('annulé');
+          return { ...result, status: 'skipped', reason: 'annulé' };
+        }
         const already = await state.isClaimed(name, offer.id);
         const entry = { ...offer, claimedBefore: already };
         result.offers.push(entry);
@@ -132,9 +152,12 @@ async function runProvider(name, { claim = true } = {}) {
       }
       return result;
     } catch (err) {
+      if (cancelled) return { ...result, status: 'skipped', reason: 'annulé' };
       plog.error(err.message);
       await screenshot(page, name, 'fatal');
       return { ...result, status: 'error', error: err.message };
+    } finally {
+      currentContext = null;
     }
   });
 }
@@ -143,8 +166,21 @@ async function runProvider(name, { claim = true } = {}) {
  * Active une clé sur son store cible, dans le contexte navigateur de ce store
  * (une clé GOG a besoin de la session GOG, pas de celle d'Amazon).
  */
-/** Page d'activation de clé, par store. */
-export function redeemUrl(target) {
+/**
+ * Lien d'activation, avec la clé pré-remplie quand le store le permet : un clic
+ * suffit alors, sans copier-coller.
+ */
+export function redeemUrl(target, code = null) {
+  const c = code ? encodeURIComponent(code) : null;
+  const withCode = {
+    gog: c && `https://www.gog.com/redeem/${c}`,
+    steam: c && `https://store.steampowered.com/account/registerkey?key=${c}`,
+    epic: c && `https://store.epicgames.com/redeem?code=${c}`,
+    microsoft: c && `https://account.microsoft.com/billing/redeem?code=${c}`,
+  }[target];
+  if (withCode) return withCode;
+
+  // Legacy Games demande e-mail + clé dans un formulaire : pas de pré-remplissage.
   return {
     gog: 'https://www.gog.com/redeem',
     steam: 'https://store.steampowered.com/account/registerkey',
@@ -198,7 +234,13 @@ async function redeemKey(key) {
         await notifyEvent(
           'failure',
           `🔑 Clé à activer à la main — ${key.title}`,
-          [`Store : ${key.target || 'inconnu'}`, `Clé : ${key.code}`, redeemUrl(key.target) || '']
+          [
+            `Store : ${key.target || 'inconnu'}`,
+            `Clé : ${key.code}`,
+            redeemUrl(key.target, key.code)
+              ? `Activer en un clic : ${redeemUrl(key.target, key.code)}`
+              : '',
+          ]
             .filter(Boolean)
             .join('\n'),
         );
@@ -230,9 +272,14 @@ export async function runAll({ claim = true, only = null } = {}) {
   const names = (only ? [only] : config.providers).filter(Boolean);
 
   return withLock(claim ? 'run' : 'detect', async () => {
+    cancelled = false;
     log.info(`démarrage (${claim ? 'claim' : 'détection'}) :`, names.join(', '));
     const results = [];
     for (const name of names) {
+      if (cancelled) {
+        log.warn('annulation : stores restants ignorés');
+        break;
+      }
       try {
         results.push(await runProvider(name, { claim }));
       } catch (err) {
@@ -277,9 +324,9 @@ async function notifyAvailable(results) {
   const lines = [];
   for (const r of results) {
     const fresh = (r.offers || []).filter((o) => !o.claimedBefore && o.status !== 'owned');
-    if (fresh.length) {
-      lines.push(`${(r.label || r.provider).toUpperCase()} : ${fresh.map((o) => o.title).join(', ')}`);
-    }
+    if (!fresh.length) continue;
+    lines.push(`${(r.label || r.provider).toUpperCase()}`);
+    for (const o of fresh) lines.push(`  · ${o.title} — ${o.url}`);
   }
   if (!lines.length) return;
   await notifyEvent('available', '🎁 Jeux gratuits disponibles', lines.join('\n'));

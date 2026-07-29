@@ -10,8 +10,51 @@ const CLAIM = 'https://www.gog.com/giveaway/claim';
 export default {
   name: 'gog',
   label: 'GOG',
-  loginUrl: 'https://login.gog.com/auth?client_id=46899977096215655&redirect_uri=https%3A%2F%2Fwww.gog.com%2Fon_login_success&response_type=code&layout=default',
+  // Pas d'URL OAuth codée en dur : le couple client_id/redirect_uri évolue et
+  // un décalage donne un « redirect_uri mismatch » sur lequel la connexion ne
+  // peut pas aboutir. On part de la home et on clique « Sign in », c'est GOG
+  // qui fabrique l'URL valide.
+  loginUrl: HOME,
   homeUrl: 'https://www.gog.com/',
+
+  /**
+   * Ouvre le formulaire de connexion. GOG ne l'expose pas comme une page mais
+   * comme une modale déclenchée par le fragment ##openlogin (c'est là que
+   * /account redirige) : on l'utilise directement, et le clic sur le bouton du
+   * header ne sert que de repli.
+   */
+  async openLogin(page) {
+    await page.goto(HOME, { waitUntil: 'domcontentloaded' });
+    await sleep(3000);
+    await clickFirst(page, ['button:has-text("Accept")', 'button:has-text("Tout accepter")'], { timeout: 3000 });
+
+    // Le fragment doit être posé une fois la page chargée : présent dès l'URL
+    // de départ, le routeur de GOG ne le voit pas passer.
+    await page.evaluate(() => {
+      window.location.hash = '#openlogin';
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    }).catch(() => {});
+    await sleep(3000);
+
+    const emailField = 'input[type="email"], #login_username, input[name*="email" i]';
+    if (await page.locator(emailField).first().isVisible({ timeout: 8000 }).catch(() => false)) {
+      return page.url();
+    }
+    log.debug('modale de login non ouverte, repli sur le bouton du header');
+    // Le bouton visible du header est un <button> sans href, piloté en JS :
+    // viser uniquement des <a href> ne matchait rien.
+    const clicked = await clickFirst(page, [
+      'button.menu-anonymous-header__btn:has-text("Sign in")',
+      'button:has-text("Sign in")',
+      'button:has-text("Se connecter")',
+      'a[href*="login.gog.com"]',
+      'a.menu-link--anonymous',
+      '#menuLogin',
+    ], { timeout: 12000 });
+    if (!clicked) log.warn('lien « Sign in » introuvable sur la home');
+    await sleep(3000);
+    return page.url();
+  },
 
   async isLoggedIn(page) {
     // C'est l'endpoint qu'utilise le header de GOG : réponse binaire et fiable,

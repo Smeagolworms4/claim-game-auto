@@ -46,41 +46,56 @@ export default {
     } else if (!(await openFromList(page, offer))) {
       return { status: 'manual', message: `à réclamer à la main sur ${HOME}` };
     }
-    await sleep(2500);
+    await sleep(3000);
 
-    if (await page.locator('p:has-text("Collected"), p:has-text("Récupéré")').first().isVisible({ timeout: 3000 }).catch(() => false)) {
-      return { status: 'owned' };
+    // L'état de l'offre se lit UNIQUEMENT sur le bouton de la buy-box. Chercher
+    // « Collected » dans toute la page donne des faux positifs : le mot apparaît
+    // aussi dans les offres liées et la FAQ.
+    const cta = page.locator('[data-a-target="buy-box_call-to-action"]').first();
+    if (!(await cta.isVisible({ timeout: 15000 }).catch(() => false))) {
+      return { status: 'unknown', message: 'buy-box introuvable' };
     }
 
-    const clicked = await clickFirst(
-      page,
-      [
-        'button[data-a-target="buy-box_call-to-action"]',
-        'button[data-a-target="FGWPOffer"]',
-        'button:has-text("Claim"):visible',
-        'button:has-text("Récupérer"):visible',
-      ],
-      { timeout: 12000 },
-    );
-    if (!clicked) return { status: 'skipped', message: 'bouton Claim introuvable' };
+    const label = ((await cta.textContent().catch(() => '')) || '').trim();
+    log.debug(offer.title, '→ bouton:', label);
+
+    if (/collected|récupéré|in your library|dans votre biblioth/i.test(label)) {
+      return { status: 'owned' };
+    }
+    if (!/get game|claim|récupérer|obtenir|get \w+/i.test(label)) {
+      return { status: 'skipped', message: `bouton inattendu : ${label}` };
+    }
+
+    await cta.click({ timeout: 10000 }).catch((err) => log.warn('clic:', err.message.split('\n')[0]));
     await sleep(6000);
 
-    // Beaucoup d'offres "jeu" nécessitent un compte externe lié (GOG, Epic,
-    // Microsoft, Legacy Games) et/ou la saisie d'une clé sur le store partenaire.
-    const linking = await page
-      .locator('div:has-text("Link game account"), div:has-text("Link account"), div:has-text("Lier")')
-      .first()
-      .isVisible({ timeout: 4000 })
-      .catch(() => false);
+    const target = await detectTarget(page, offer);
 
+    // Clé éventuelle, cherchée dans la zone d'achat et non dans toute la page.
     const code = await page
-      .locator('[data-a-target="copy-code-input"], input[readonly][value]')
+      .locator('[data-a-target="copy-code-input"], [data-a-target="buy-box"] input[readonly]')
       .first()
       .inputValue()
       .catch(() => null);
-    const target = await detectTarget(page, offer);
 
-    if (linking && !code) {
+    // Le bouton reflète le nouvel état : c'est notre confirmation.
+    const after = ((await cta.textContent().catch(() => '')) || '').trim();
+    const done = /collected|récupéré|in your library|dans votre biblioth/i.test(after);
+
+    if (code) {
+      log.info(offer.title, `→ clé à activer sur ${target || 'le store partenaire'}`);
+      return { status: 'claimed', message: `clé ${target || 'partenaire'}`, code, target };
+    }
+    if (done) return { status: 'claimed', target };
+
+    // Compte externe à lier : Amazon l'annonce dans la zone d'achat.
+    const linking = await page
+      .locator('[data-a-target="buy-box"]')
+      .filter({ hasText: /link (game )?account|lier/i })
+      .first()
+      .isVisible({ timeout: 4000 })
+      .catch(() => false);
+    if (linking) {
       return {
         status: 'manual',
         message: `compte ${target || 'externe'} à lier — ouvre le VNC ou la page Amazon`,
@@ -88,17 +103,7 @@ export default {
       };
     }
 
-    const collected = await page
-      .locator('p:has-text("Collected"), p:has-text("Récupéré"), div:has-text("Successfully claimed")')
-      .first()
-      .isVisible({ timeout: 8000 })
-      .catch(() => false);
-
-    if (code) {
-      log.info(offer.title, `→ clé à activer sur ${target || 'le store partenaire'}`);
-      return { status: 'claimed', message: `clé ${target || 'partenaire'}`, code, target };
-    }
-    return collected ? { status: 'claimed', target } : { status: 'unknown', target };
+    return { status: 'unknown', message: `bouton après clic : ${after || '(vide)'}`, target };
   },
 };
 

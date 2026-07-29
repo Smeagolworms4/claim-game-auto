@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, applySettings, snapshot, forcedSettings } from '../config.js';
 import { makeLogger, recentLogs, logEvents } from '../logger.js';
-import { runAll, detectAll, redeemPendingKeys, events as runnerEvents } from '../runner.js';
+import { runAll, detectAll, redeemPendingKeys, cancel, events as runnerEvents } from '../runner.js';
 import { providers, allNames, capabilities } from '../providers/index.js';
 import * as state from '../state.js';
 import * as loginSession from '../login.js';
@@ -138,6 +138,34 @@ async function handleApi(req, res, url) {
 
     case 'GET /api/attention':
       return json(res, 200, { pending: await attention.pending(), all: await attention.list() });
+
+    case 'POST /api/claimed': {
+      // Un jeu récupéré à la main (typiquement quand un captcha bloque le
+      // claim automatique) : on l'enregistre pour ne plus le retenter.
+      const { provider, id, title, url } = await readBody(req);
+      if (!provider || !id) return json(res, 400, { error: 'provider et id requis' });
+      await state.markClaimed(provider, id, { title, url, manual: true });
+      await state.addHistory({ provider, title, url, status: 'claimed', message: 'marqué à la main' });
+      const cached = lastDetection.byProvider[provider];
+      const offer = cached?.offers?.find((o) => o.id === id);
+      if (offer) {
+        offer.claimedBefore = true;
+        offer.status = 'owned';
+      }
+      log.info(`${provider} : « ${title || id} » marqué comme réclamé`);
+      return json(res, 200, { ok: true });
+    }
+
+    case 'POST /api/cancel':
+      return json(res, 200, cancel());
+
+    case 'POST /api/attention/dismiss': {
+      const { token } = await readBody(req);
+      if (!token) return json(res, 400, { error: 'jeton manquant' });
+      await state.dropAttention([token]);
+      log.info('demande d\'intervention écartée');
+      return json(res, 200, { dismissed: true });
+    }
 
     case 'GET /api/keys':
       return json(res, 200, { keys: await state.keys() });
