@@ -192,7 +192,7 @@ async function handleApi(req, res, url) {
       // Vérifie la chaîne de notification de bout en bout, avec le lien de
       // l'interface pour contrôler que PUBLIC_URL est correct.
       const link = config.publicUrl || `http://localhost:${config.webPort}`;
-      await notify(
+      const result = await notify(
         '🔔 claim-auto — test',
         [
           'Ceci est une notification de test.',
@@ -202,16 +202,12 @@ async function handleApi(req, res, url) {
           .filter(Boolean)
           .join('\n'),
       );
-      const channels = [
-        config.discordWebhook && 'discord',
-        config.slackWebhook && 'slack',
-        config.telegramToken && config.telegramChatId && 'telegram',
-        config.ntfyTopic && 'ntfy',
-        config.webhookUrl && 'webhook',
-        config.freeMobileUser && config.freeMobilePass && 'sms',
-      ].filter(Boolean);
-      log.info('notification de test envoyée:', channels.join(', ') || 'aucun canal configuré');
-      return json(res, 200, { sent: channels, link });
+      log.info(
+        'notification de test —',
+        `envoyée: ${result.sent.join(', ') || 'aucun'}`,
+        result.failed.length ? `| échecs: ${result.failed.map((f) => f.channel).join(', ')}` : '',
+      );
+      return json(res, 200, { ...result, link });
     }
 
     case 'POST /api/cancel':

@@ -68,10 +68,15 @@ const channels = [
   {
     name: 'ntfy',
     enabled: () => Boolean(config.ntfyTopic),
+    // API JSON plutôt que les en-têtes : un titre avec emoji ou accent ne peut
+    // pas passer par l'en-tête Title, limité au Latin-1 (« Cannot convert
+    // argument to a ByteString »).
     send: (title, text) =>
-      post(`${config.ntfyServer.replace(/\/$/, '')}/${config.ntfyTopic}`, text, {
-        'content-type': 'text/plain',
-        Title: title,
+      post(`${config.ntfyServer.replace(/\/$/, '')}/`, {
+        topic: config.ntfyTopic,
+        title,
+        message: text,
+        ...(config.publicUrl ? { click: config.publicUrl } : {}),
       }),
   },
 ];
@@ -87,12 +92,22 @@ export async function notifyEvent(kind, title, text) {
 
 export async function notify(title, text) {
   const active = channels.filter((c) => c.enabled());
-  if (!active.length) return;
+  if (!active.length) return { sent: [], failed: [] };
+
+  const sent = [];
+  const failed = [];
   await Promise.all(
     active.map((c) =>
-      c.send(title, text).catch((err) => log.warn(`échec notification ${c.name}:`, err.message)),
+      c
+        .send(title, text)
+        .then(() => sent.push(c.name))
+        .catch((err) => {
+          log.warn(`échec notification ${c.name}:`, err.message);
+          failed.push({ channel: c.name, error: err.message });
+        }),
     ),
   );
+  return { sent, failed };
 }
 
 export function formatReport(results) {

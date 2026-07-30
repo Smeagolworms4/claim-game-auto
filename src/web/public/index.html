@@ -562,11 +562,13 @@ const app = Vue.createApp({
       const r = await api('/api/notify/test', {});
       this.testing = false;
       if (r.error) return this.toast(r.error, 'error');
+      const ok = r.sent?.length ? `envoyée sur ${r.sent.join(', ')}` : '';
+      const ko = r.failed?.length
+        ? `échec ${r.failed.map((f) => f.channel + ' (' + f.error + ')').join(', ')}`
+        : '';
       this.toast(
-        r.sent?.length
-          ? `Notification envoyée sur : ${r.sent.join(', ')}`
-          : 'Aucun canal configuré — renseigne au moins un webhook.',
-        r.sent?.length ? 'success' : 'warning',
+        [ok, ko].filter(Boolean).join(' — ') || 'Aucun canal configuré.',
+        r.failed?.length ? 'error' : r.sent?.length ? 'success' : 'warning',
       );
     },
 
