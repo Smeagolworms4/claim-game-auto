@@ -108,6 +108,8 @@
                   <code v-if="o.code" class="ml-1">{{ o.code }}</code>
                 </v-list-item-subtitle>
                 <template #append>
+                  <v-chip v-if="o.target" size="x-small" variant="outlined" class="mr-1"
+                          :title="targetHint(o.target)">{{ targetLabel(o.target) }}</v-chip>
                   <v-chip size="x-small" variant="tonal" :color="statusColor(o.status)">
                     {{ statusLabel(o) }}
                   </v-chip>
@@ -461,6 +463,17 @@ const app = Vue.createApp({
       return o.claimedBefore ? 'déjà traité' : 'détecté';
     },
     statusColor: (st) => (STATUS[st] ? STATUS[st][1] : 'primary'),
+
+    // Destination du jeu : GOG, Legacy Games, Epic… ou Luna quand il est
+    // jouable directement sans clé.
+    targetLabel: (t) => ({
+      gog: 'GOG', legacy: 'Legacy', epic: 'Epic', steam: 'Steam',
+      microsoft: 'Microsoft', luna: 'Luna',
+    }[t] || t),
+
+    targetHint: (t) => (['gog', 'legacy', 'steam', 'microsoft'].includes(t)
+      ? `Clé à activer sur ${t}`
+      : 'Jouable via le compte lié, sans clé'),
     loginLabel: (p) => (!p.detected ? 'inconnu' : p.detected.loggedIn ? 'connecté' : 'non connecté'),
     loginColor: (p) => (!p.detected ? 'grey' : p.detected.loggedIn ? 'success' : 'error'),
 

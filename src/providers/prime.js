@@ -59,7 +59,7 @@ export default {
     // de l'outil : leur clé n'a jamais été enregistrée.
     let state = await readClaimState(page);
     if (state.claimed) {
-      const t = state.target || (await detectTarget(page, offer));
+      const t = state.target || offer.target || (await detectTarget(page, offer));
       return {
         status: 'owned',
         code: state.code,
@@ -80,8 +80,9 @@ export default {
     // Seuls GOG, Legacy Games (et Steam/Microsoft) émettent une clé. Les offres
     // Epic passent par un compte lié : inutile d'attendre un code qui
     // n'arrivera jamais, on se contente de confirmer la récupération.
-    const expected = await detectTarget(page, offer);
+    const expected = offer.target || (await detectTarget(page, offer));
     const expectsKey = ['gog', 'legacy', 'steam', 'microsoft'].includes(expected);
+    // 'luna' et 'epic' : jouables via le compte lié, aucune clé émise.
     if (!expectsKey) {
       log.info(offer.title, `→ ${expected || 'store interne'} : pas de clé, compte lié`);
     }
@@ -241,7 +242,7 @@ export async function detectTarget(page, offer) {
     ['-epic', 'epic'],
     ['-steam', 'steam'],
     ['-ms', 'microsoft'],
-    ['-aga', 'amazon'], // Amazon Games App : rien à activer ailleurs
+    ['-aga', 'luna'], // Luna / Amazon Games App : rien à activer ailleurs
   ];
   for (const [suffix, name] of bySlug) {
     if (slug.includes(suffix)) return name;
@@ -350,10 +351,23 @@ async function collect(page, dataType, listTarget) {
         // Marqueur dédié d'Amazon, bien plus fiable qu'un match sur le texte.
         const collected = Boolean(card.querySelector('[data-a-target="ItemCardDetailSuccessStatus"]'));
         const href = link?.getAttribute('href') || '';
+        // Destination déduite du slug : connue dès la détection, sans visiter
+        // la fiche. C'est elle qui décide ensuite s'il y a une clé à attendre.
+        const slug = href.toLowerCase();
+        const target =
+          (slug.includes('-gog') && 'gog') ||
+          (slug.includes('-legacy') && 'legacy') ||
+          (slug.includes('-epic') && 'epic') ||
+          (slug.includes('-steam') && 'steam') ||
+          (slug.includes('-ms') && 'microsoft') ||
+          (slug.includes('-aga') && 'luna') ||
+          null;
+
         return {
           id: href || title,
           title,
           type,
+          target,
           owned: collected,
           // gaming.amazon.com redirige vers luna.amazon.com : on résout les
           // liens relatifs sur l'origine réellement servie.

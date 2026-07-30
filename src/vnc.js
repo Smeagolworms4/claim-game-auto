@@ -1,4 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { config } from './config.js';
 import { makeLogger } from './logger.js';
@@ -41,6 +42,15 @@ export async function ensureDisplay() {
     }
   }
   if (!(await has('Xvfb'))) throw new Error('Xvfb absent (hors Docker ?)');
+
+  // Verrou d'un X précédent (survit à un `docker restart`) : le test
+  // xdpyinfo ci-dessus a échoué, donc plus aucun serveur ne tourne.
+  const num = config.display.replace(':', '');
+  await Promise.all([
+    fs.rm(`/tmp/.X${num}-lock`, { force: true }).catch(() => {}),
+    fs.rm(`/tmp/.X11-unix/X${num}`, { force: true }).catch(() => {}),
+  ]);
+
   const [w, h] = config.screen.split(',');
   procs.xvfb = spawnBg('Xvfb', [config.display, '-screen', '0', `${w}x${h}x24`, '-nolisten', 'tcp']);
   await new Promise((r) => setTimeout(r, 1200));

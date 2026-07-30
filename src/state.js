@@ -83,11 +83,32 @@ export async function addKey({ code, target, title, from = 'prime', url = null, 
   if (!code) return null;
   const s = await load();
   if (!s.keys) s.keys = {};
+
   if (!s.keys[code]) {
     s.keys[code] = { code, target, title, from, url, redeemUrl, at: new Date().toISOString(), status: 'pending' };
     await save();
+    return s.keys[code];
   }
-  return s.keys[code];
+
+  // Clé déjà connue : on complète ce qui manquait. Sans ça, une clé enregistrée
+  // avant qu'on sache lire son lien d'activation restait définitivement
+  // inactivable. Une information nouvelle justifie une nouvelle tentative.
+  const existing = s.keys[code];
+  let changed = false;
+  if (redeemUrl && !existing.redeemUrl) {
+    existing.redeemUrl = redeemUrl;
+    changed = true;
+  }
+  if (target && !existing.target) {
+    existing.target = target;
+    changed = true;
+  }
+  if (changed && ['manual', 'unknown', 'error'].includes(existing.status)) {
+    existing.status = 'pending';
+    existing.message = null;
+  }
+  if (changed) await save();
+  return existing;
 }
 
 // Statuts qui méritent une nouvelle tentative. « unknown » en fait partie :

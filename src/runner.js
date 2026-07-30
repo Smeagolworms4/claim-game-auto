@@ -227,6 +227,9 @@ async function redeemKey(key) {
       await state.updateKey(key.code, {
         status: done ? 'redeemed' : res.status === 'dry-run' ? 'pending' : res.status,
         message: res.message,
+        // Lien découvert pendant l'activation : mémorisé pour l'interface et
+        // les tentatives suivantes.
+        ...(res.redeemUrl && !key.redeemUrl ? { redeemUrl: res.redeemUrl } : {}),
       });
       await state.addHistory({
         provider: key.target,
