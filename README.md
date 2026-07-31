@@ -403,6 +403,28 @@ startup). Always click "I'm done" before touching the container.
 - Sessions expire after a few weeks/months: the interface shows *"not logged in"*, you
   just have to redo the VNC login.
 
+## Protecting access
+
+`WEB_USER` and `WEB_PASSWORD` enable basic authentication covering the **whole**
+application: the interface, the API, **and the VNC** — noVNC page and WebSocket
+alike. Leaving the WebSocket unprotected would make the password pointless: the
+VNC stream grants direct control of the browser.
+
+```bash
+WEB_USER=me
+WEB_PASSWORD=a-strong-password
+```
+
+Unlock links received in notifications stay openable without a password: their
+random, time-limited token is the secret. Opening such a link sets a cookie that
+authorises the VNC for that session only.
+
+> **Ports 6080 and 5900 are not published by default.** They carry no
+> authentication: uncommenting them in `docker-compose.yml` bypasses
+> `WEB_USER`/`WEB_PASSWORD` entirely and exposes the browser to anyone who can
+> reach the machine. That is your call, and only sensible on a trusted network.
+> The web interface already proxies noVNC on its own, protected port.
+
 ## Security
 
 No credentials are stored by the tool: only the **session cookies** live in the browser

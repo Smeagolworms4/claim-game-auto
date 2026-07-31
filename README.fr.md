@@ -404,6 +404,28 @@ suivant). Clique toujours « J'ai fini » avant de toucher au conteneur.
 - Les sessions expirent au bout de quelques semaines/mois : l'interface affiche
   *« non connecté »*, il suffit de refaire le login VNC.
 
+## Protéger l'accès
+
+`WEB_USER` et `WEB_PASSWORD` activent une authentification basique qui couvre
+**toute** l'application : l'interface, l'API, **et le VNC** — page noVNC comme
+WebSocket. Sans WebSocket protégé, un mot de passe sur l'interface ne servirait
+à rien : le flux VNC donne le contrôle direct du navigateur.
+
+```bash
+WEB_USER=moi
+WEB_PASSWORD=un-mot-de-passe-solide
+```
+
+Les liens de déblocage reçus en notification restent ouvrables sans mot de
+passe : leur jeton, aléatoire et à durée limitée, fait office de secret. Ouvrir
+un tel lien dépose un cookie qui autorise le VNC de cette session uniquement.
+
+> **Les ports 6080 et 5900 ne sont pas publiés par défaut.** Ils n'ont aucune
+> authentification : les décommenter dans `docker-compose.yml` court-circuite
+> entièrement `WEB_USER`/`WEB_PASSWORD` et expose le navigateur à qui atteint la
+> machine. C'est un choix qui vous appartient, à ne faire que sur un réseau de
+> confiance. L'interface web proxifie déjà noVNC sur son propre port, protégé.
+
 ## Sécurité
 
 Aucun identifiant n'est stocké par l'outil : seuls les **cookies de session** vivent dans

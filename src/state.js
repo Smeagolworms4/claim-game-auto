@@ -116,12 +116,24 @@ export async function addKey({ code, target, title, from = 'prime', url = null, 
 // chargée, bouton manqué, session à rafraîchir) restait bloquée pour toujours.
 const RETRYABLE = new Set(['pending', 'unknown', 'captcha', 'error']);
 
-export async function keys({ pendingOnly = false } = {}) {
+export async function keys({ pendingOnly = false, includeArchived = true } = {}) {
   const s = await load();
-  const list = Object.values(s.keys || {});
-  return (pendingOnly ? list.filter((k) => RETRYABLE.has(k.status)) : list).sort((a, b) =>
-    b.at.localeCompare(a.at),
-  );
+  let list = Object.values(s.keys || {});
+  // Une clé archivée est mise de côté volontairement : plus de tentative
+  // d'activation, plus de comptage dans « à activer ».
+  if (pendingOnly) list = list.filter((k) => RETRYABLE.has(k.status) && !k.archived);
+  else if (!includeArchived) list = list.filter((k) => !k.archived);
+  return list.sort((a, b) => b.at.localeCompare(a.at));
+}
+
+/** Archive (ou désarchive) une clé, sans jamais la supprimer. */
+export async function archiveKey(code, archived = true) {
+  const s = await load();
+  if (!s.keys?.[code]) return null;
+  s.keys[code].archived = Boolean(archived);
+  s.keys[code].archivedAt = archived ? new Date().toISOString() : null;
+  await save();
+  return s.keys[code];
 }
 
 export async function updateKey(code, patch) {

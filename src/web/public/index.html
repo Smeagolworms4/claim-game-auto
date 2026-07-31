@@ -44,6 +44,10 @@
            :disabled="status.busy" @click="detect()">Détecter</v-btn>
     <v-btn color="primary" variant="flat" class="mr-2" prepend-icon="mdi-gift-outline"
            :disabled="status.busy" @click="run()">Tout réclamer</v-btn>
+    <v-btn v-if="status.login?.active && !vncOpen" color="info" variant="tonal" class="mr-2"
+           prepend-icon="mdi-monitor-eye" @click="takeOverVnc()">
+      Session VNC ouverte
+    </v-btn>
     <v-btn v-if="status.busy && !status.login?.active" color="error" variant="tonal" class="mr-2"
            prepend-icon="mdi-stop-circle-outline" @click="stop()">Arrêter</v-btn>
     <v-btn variant="text" icon="mdi-cog-outline" class="mr-2" title="Réglages"
@@ -68,8 +72,10 @@
                  :disabled="status.busy" @click="unlock(a)">Débloquer dans le VNC</v-btn>
           <v-btn v-if="a.url" variant="text" size="small" :href="a.url" target="_blank"
                  prepend-icon="mdi-open-in-new">Faire à la main</v-btn>
-          <v-btn variant="text" size="small" :href="'/unlock/' + a.token" target="_blank"
+          <v-btn variant="text" size="small" :href="a.link || ('/unlock/' + a.token)" target="_blank"
                  prepend-icon="mdi-link-variant">Lien de déblocage</v-btn>
+          <v-btn v-if="a.link" variant="text" size="small" icon="mdi-content-copy"
+                 title="Copier le lien envoyé en notification" @click="copy(a.link)"></v-btn>
           <v-btn variant="text" size="small" icon="mdi-close" title="Écarter cette demande"
                  @click="dismiss(a)"></v-btn>
         </div>
@@ -138,17 +144,28 @@
           <v-card border>
             <v-toolbar density="compact" color="surface">
               <v-icon class="ml-4" icon="mdi-key-variant"></v-icon>
-              <v-toolbar-title class="text-subtitle-2 ml-2">Clés à activer</v-toolbar-title>
+              <v-toolbar-title class="text-subtitle-2 ml-2">Clés</v-toolbar-title>
+              <v-tabs v-model="keyTab" density="compact" class="ml-4">
+                <v-tab value="actives">Actives ({{ activeKeys.length }})</v-tab>
+                <v-tab value="archivees">Archivées ({{ archivedKeys.length }})</v-tab>
+              </v-tabs>
               <v-spacer></v-spacer>
-              <v-btn size="small" variant="tonal" class="mr-3" prepend-icon="mdi-key-arrow-right"
+              <v-btn v-if="keyTab === 'actives' && redeemedKeys.length" size="small" variant="text"
+                     class="mr-2" prepend-icon="mdi-archive-arrow-down-outline"
+                     @click="archiveKeys(redeemedKeys.map(k => k.code), true)">
+                Archiver les activées ({{ redeemedKeys.length }})
+              </v-btn>
+              <v-btn v-if="keyTab === 'actives'" size="small" variant="tonal" class="mr-3"
+                     prepend-icon="mdi-key-arrow-right"
                      :disabled="status.busy || !status.pendingKeys" @click="redeemKeys()">
                 Activer ({{ status.pendingKeys || 0 }})
               </v-btn>
             </v-toolbar>
             <!-- v-data-table plutôt que v-table : dans un template in-DOM, le
                  parser HTML déplacerait des <tr>/<td> écrits à la main. -->
-            <v-data-table :headers="keyHeaders" :items="keys" density="compact"
-                          items-per-page="10" hide-default-footer>
+            <v-data-table :headers="keyHeaders" :items="shownKeys" density="compact"
+                          items-per-page="10" hide-default-footer
+                          no-data-text="Aucune clé dans cet onglet.">
               <template #item.target="{ item }">
                 <v-chip size="x-small" variant="tonal">{{ item.target || 'inconnu' }}</v-chip>
               </template>
@@ -183,6 +200,12 @@
                 <span v-if="item.message" class="text-medium-emphasis text-caption ml-2">
                   {{ item.message }}
                 </span>
+                <v-btn v-if="!item.archived" size="x-small" variant="text" class="ml-1"
+                       icon="mdi-archive-arrow-down-outline" title="Archiver cette clé"
+                       @click="archiveKeys([item.code], true)"></v-btn>
+                <v-btn v-else size="x-small" variant="text" class="ml-1"
+                       icon="mdi-archive-arrow-up-outline" title="Désarchiver"
+                       @click="archiveKeys([item.code], false)"></v-btn>
               </template>
             </v-data-table>
           </v-card>
@@ -246,15 +269,15 @@
       <v-toolbar density="comfortable" color="surface">
         <v-icon class="ml-4" icon="mdi-monitor-lock"></v-icon>
         <v-toolbar-title class="text-subtitle-1">
-          Connexion — {{ vncLabel }}
+          {{ unlockToken ? 'Déblocage' : 'Connexion' }} — {{ vncLabel }}
         </v-toolbar-title>
-        <span class="text-medium-emphasis text-body-2 d-none d-md-block">
-          Connecte-toi dans le navigateur, puis clique « J'ai fini » : le VNC se coupe et tout repasse en headless.
-        </span>
+        <span class="text-medium-emphasis text-body-2 d-none d-md-block">{{ vncHint }}</span>
         <v-spacer></v-spacer>
         <v-btn variant="text" @click="closeVnc()">Fermer</v-btn>
         <v-btn color="primary" variant="flat" class="mr-2" :loading="finishing"
-               prepend-icon="mdi-check" @click="finishLogin()">J'ai fini</v-btn>
+               prepend-icon="mdi-check" @click="finishLogin()">
+          {{ unlockToken ? "C'est débloqué" : "J'ai fini" }}
+        </v-btn>
       </v-toolbar>
       <iframe v-if="vncOpen" class="vnc-frame" :src="vncSrc"></iframe>
     </v-card>
@@ -326,6 +349,37 @@
             variant="outlined" density="compact" hide-details></v-text-field></v-col>
           <v-col cols="12" md="6"><v-text-field v-model="set.freeMobilePass" :disabled="isForced('freeMobilePass')" :hint="forcedHint('freeMobilePass')" persistent-hint label="SMS Free Mobile — clé"
             variant="outlined" density="compact" hide-details></v-text-field></v-col>
+        </v-row>
+
+        <div class="text-overline mt-4 mb-1">E-mail (SMTP)</div>
+        <v-row dense>
+          <v-col cols="12" md="8"><v-text-field v-model="set.smtpHost" label="Serveur SMTP"
+            placeholder="smtp.mondomaine.fr" variant="outlined" density="compact"
+            :disabled="isForced('smtpHost')" :hint="forcedHint('smtpHost')" persistent-hint></v-text-field></v-col>
+          <v-col cols="6" md="2"><v-text-field v-model="set.smtpPort" label="Port" type="number"
+            variant="outlined" density="compact"
+            :disabled="isForced('smtpPort')" :hint="forcedHint('smtpPort')" persistent-hint></v-text-field></v-col>
+          <v-col cols="6" md="2"><v-switch v-model="set.smtpSecure" color="primary" density="compact"
+            label="TLS direct (465)" :disabled="isForced('smtpSecure')"
+            :hint="forcedHint('smtpSecure') || 'Décoché = STARTTLS'" persistent-hint></v-switch></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.smtpUser" label="Utilisateur"
+            variant="outlined" density="compact" autocomplete="off"
+            :disabled="isForced('smtpUser')" :hint="forcedHint('smtpUser')" persistent-hint></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.smtpPass" label="Mot de passe"
+            :type="showSmtpPass ? 'text' : 'password'" autocomplete="new-password"
+            :append-inner-icon="showSmtpPass ? 'mdi-eye-off' : 'mdi-eye'"
+            @click:append-inner="showSmtpPass = !showSmtpPass"
+            variant="outlined" density="compact"
+            :disabled="isForced('smtpPass')"
+            :hint="forcedHint('smtpPass') || 'Gmail : mot de passe d\'application'" persistent-hint></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.smtpFrom" label="Expéditeur"
+            placeholder="claim-auto@mondomaine.fr" variant="outlined" density="compact"
+            :disabled="isForced('smtpFrom')"
+            :hint="forcedHint('smtpFrom') || 'Vide = l\'utilisateur SMTP'" persistent-hint></v-text-field></v-col>
+          <v-col cols="12" md="6"><v-text-field v-model="set.smtpTo" label="Destinataire"
+            placeholder="moi@mondomaine.fr" variant="outlined" density="compact"
+            :disabled="isForced('smtpTo')"
+            :hint="forcedHint('smtpTo') || 'Requis pour activer l\'envoi'" persistent-hint></v-text-field></v-col>
         </v-row>
 
         <div class="text-overline mt-4 mb-1">Webhook générique (SMS, Gotify, Home Assistant…)</div>
@@ -406,6 +460,7 @@ const app = Vue.createApp({
     logs: [],
     history: [],
     keys: [],
+    keyTab: 'actives',
     keyHeaders: [
       { title: 'Jeu', key: 'title' },
       { title: 'À activer sur', key: 'target' },
@@ -417,6 +472,7 @@ const app = Vue.createApp({
     setOpen: false,
     setBusy: false,
     testing: false,
+    showSmtpPass: false,
     set: { notifyEvents: [] },
     setAvailable: [],
     setForced: {},
@@ -433,6 +489,12 @@ const app = Vue.createApp({
     vncOpen: false,
     vncLabel: '',
     unlockToken: null,
+    // Session que l'utilisateur a explicitement refermée : on ne la rouvre pas
+    // tant qu'elle dure, sinon chaque rafraîchissement la réaffiche.
+    vncDismissed: null,
+    // Vrai si c'est CET onglet qui a lancé la session. Sans ça, ouvrir le VNC
+    // dans un onglet le faisait surgir dans tous les autres.
+    vncOwned: false,
     vncSrc: '',
     finishing: false,
     snack: { show: false, text: '', color: 'info' },
@@ -447,6 +509,27 @@ const app = Vue.createApp({
   }),
 
   computed: {
+    activeKeys() {
+      return this.keys.filter((k) => !k.archived);
+    },
+    archivedKeys() {
+      return this.keys.filter((k) => k.archived);
+    },
+    redeemedKeys() {
+      return this.activeKeys.filter((k) => k.status === 'redeemed');
+    },
+    shownKeys() {
+      return this.keyTab === 'archivees' ? this.archivedKeys : this.activeKeys;
+    },
+
+    // Le VNC sert à deux choses très différentes : se connecter, ou lever un
+    // blocage (captcha). Le message doit dire laquelle.
+    vncHint() {
+      return this.unlockToken
+        ? 'Résous le blocage dans le navigateur (captcha, vérification…), puis clique « C\'est débloqué » : la tâche reprend automatiquement.'
+        : 'Connecte-toi dans le navigateur, puis clique « J\'ai fini » : le VNC se coupe et tout repasse en headless.';
+    },
+
     busyLabel() {
       const what = this.status.current && this.status.current.what;
       return what ? what.replace('login:', 'connexion ') : 'en cours';
@@ -483,8 +566,18 @@ const app = Vue.createApp({
 
     async refresh() {
       this.status = await api('/api/status');
-      if (this.status.login && this.status.login.active && !this.vncOpen) {
-        this.openVnc(this.status.login.label);
+      const session = this.status.login;
+      if (
+        session?.active &&
+        this.vncOwned &&
+        !this.vncOpen &&
+        this.vncDismissed !== session.startedAt
+      ) {
+        this.openVnc(session.label);
+      }
+      if (!session?.active) {
+        this.vncDismissed = null;
+        this.vncOwned = false;
       }
     },
 
@@ -611,6 +704,13 @@ const app = Vue.createApp({
       this.refresh();
     },
 
+    // Reprendre ici une session ouverte depuis un autre onglet.
+    takeOverVnc() {
+      this.vncOwned = true;
+      this.vncDismissed = null;
+      this.openVnc(this.status.login?.label || '');
+    },
+
     async stop() {
       const r = await api('/api/cancel', {});
       this.toast(r.cancelled ? 'Arrêt demandé…' : (r.reason || 'rien à arrêter'), 'warning');
@@ -627,6 +727,7 @@ const app = Vue.createApp({
       const r = await api(`/api/unlock/${a.token}/start`, {});
       if (r.error) return this.toast(r.error, 'error');
       this.unlockToken = a.token;
+      this.vncOwned = true;
       this.openVnc(r.label || a.provider);
     },
 
@@ -654,6 +755,16 @@ const app = Vue.createApp({
       this.refresh();
     },
 
+    // Archiver met une clé de côté sans la perdre : elle sort des tentatives
+    // d'activation et du compteur, et reste consultable dans son onglet.
+    async archiveKeys(codes, archived) {
+      const r = await api('/api/keys/archive', { codes, archived });
+      if (r.error) return this.toast(r.error, 'error');
+      this.toast(`${r.count} clé(s) ${archived ? 'archivée(s)' : 'désarchivée(s)'}.`);
+      this.loadKeys();
+      this.refresh();
+    },
+
     async redeemKeys() {
       await api('/api/keys/redeem', {});
       this.toast('Activation des clés en cours…');
@@ -675,6 +786,7 @@ const app = Vue.createApp({
     async login(provider) {
       const r = await api('/api/login/start', { provider });
       if (r.error) return this.toast(r.error, 'error');
+      this.vncOwned = true;
       this.openVnc(r.label);
       this.refresh();
     },
@@ -694,6 +806,9 @@ const app = Vue.createApp({
       clearInterval(this.keepAlive);
       this.vncOpen = false;
       this.vncSrc = '';
+      // Mémorise la session refermée pour ne pas la rouvrir au prochain
+      // rafraîchissement. « J'ai fini » la termine vraiment côté serveur.
+      this.vncDismissed = this.status.login?.startedAt || null;
     },
 
     async finishLogin() {
@@ -704,12 +819,12 @@ const app = Vue.createApp({
       this.unlockToken = null;
       this.closeVnc();
       this.toast(
-        r.loggedIn
-          ? token
-            ? `${r.provider} débloqué — le claim repart automatiquement.`
-            : `Connecté à ${r.provider} — VNC coupé.`
-          : `${r.provider} toujours pas reconnu, réessaie.`,
-        r.loggedIn ? 'success' : 'warning',
+        r.resumed
+          ? `${r.provider} : reprise du claim en cours — suis le journal.`
+          : r.loggedIn
+            ? `Connecté à ${r.provider} — VNC coupé.`
+            : `${r.provider} toujours pas reconnu, réessaie.`,
+        r.resumed || r.loggedIn ? 'success' : 'warning',
       );
       this.refresh();
     },

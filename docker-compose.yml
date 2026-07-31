@@ -14,10 +14,14 @@ services:
     environment:
       HOME: /data/home
     ports:
-      # Ports côté hôte surchargeables dans .env si déjà utilisés.
+      # Port côté hôte surchargeable dans .env s'il est déjà utilisé.
       - "${WEB_PORT_HOST:-8080}:8080"     # interface web
-      - "${NOVNC_PORT_HOST:-6080}:6080"   # noVNC (ouvert à la demande)
-      - "${VNC_PORT_HOST:-5900}:5900"     # VNC brut (client lourd, optionnel)
+      # noVNC (6080) et VNC brut (5900) ne sont volontairement PAS publiés :
+      # ils n'ont aucune authentification, alors que le VNC servi par
+      # l'interface web est protégé comme le reste. Les décommenter contourne
+      # cette protection — à faire en connaissance de cause.
+      # - "${NOVNC_PORT_HOST:-6080}:6080"
+      # - "${VNC_PORT_HOST:-5900}:5900"
     volumes:
       - ./data:/data
     shm_size: "1gb"   # sinon Firefox/Chromium crashent sur les grosses pages

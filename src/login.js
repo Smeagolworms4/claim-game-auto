@@ -25,7 +25,7 @@ export function status() {
   };
 }
 
-export async function start(name, { url = null } = {}) {
+export async function start(name, { url = null, entry = null } = {}) {
   const provider = getProvider(name);
   if (!provider) throw new Error(`provider inconnu: ${name}`);
   if (session) throw new Error(`session déjà ouverte pour ${session.provider}`);
@@ -38,7 +38,13 @@ export async function start(name, { url = null } = {}) {
     // Sur un déblocage, on atterrit là où ça a coincé : résoudre le Turnstile
     // sur cette page dépose le cookie cf_clearance dans le profil, ce qui
     // débloque aussi les passages headless suivants.
-    if (url) {
+    if (entry && typeof provider.prepareUnlock === 'function') {
+      // Le store sait rejouer ce que l'automatisation avait déjà franchi, pour
+      // déposer l'utilisateur pile sur le blocage.
+      await provider
+        .prepareUnlock(page, entry)
+        .catch((err) => log.warn('préparation du déblocage:', err.message));
+    } else if (url) {
       await page.goto(url, { waitUntil: 'domcontentloaded' }).catch((err) => {
         log.warn('navigation déblocage:', err.message);
       });

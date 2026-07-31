@@ -95,6 +95,17 @@ export const config = {
   webhookMethod: (process.env.WEBHOOK_METHOD || 'POST').toUpperCase(),
   webhookTemplate: process.env.WEBHOOK_TEMPLATE || '{"title":"{{title}}","message":"{{text}}"}',
   webhookContentType: process.env.WEBHOOK_CONTENT_TYPE || 'application/json',
+  // E-mail via un serveur SMTP (le tien : FAI, Gmail avec mot de passe
+  // d'application, serveur auto-hébergé…).
+  smtpHost: process.env.SMTP_HOST || '',
+  smtpPort: Number(process.env.SMTP_PORT || 587),
+  // true = TLS direct (port 465). false = STARTTLS, le cas le plus courant.
+  smtpSecure: bool(process.env.SMTP_SECURE, false),
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPass: process.env.SMTP_PASS || '',
+  smtpFrom: process.env.SMTP_FROM || '',
+  smtpTo: process.env.SMTP_TO || '',
+
   // SMS via l'API Free Mobile (FR, gratuite pour les abonnés)
   freeMobileUser: process.env.FREEMOBILE_USER || '',
   freeMobilePass: process.env.FREEMOBILE_PASS || '',
@@ -118,6 +129,7 @@ export const EDITABLE = [
   'discordWebhook', 'slackWebhook', 'telegramToken', 'telegramChatId',
   'ntfyTopic', 'ntfyServer', 'webhookUrl', 'webhookMethod', 'webhookTemplate',
   'freeMobileUser', 'freeMobilePass',
+  'smtpHost', 'smtpPort', 'smtpSecure', 'smtpUser', 'smtpPass', 'smtpFrom', 'smtpTo',
 ];
 
 // Correspondance réglage → variable d'environnement. Une variable non vide dans
@@ -145,6 +157,13 @@ export const ENV_KEYS = {
   webhookTemplate: 'WEBHOOK_TEMPLATE',
   freeMobileUser: 'FREEMOBILE_USER',
   freeMobilePass: 'FREEMOBILE_PASS',
+  smtpHost: 'SMTP_HOST',
+  smtpPort: 'SMTP_PORT',
+  smtpSecure: 'SMTP_SECURE',
+  smtpUser: 'SMTP_USER',
+  smtpPass: 'SMTP_PASS',
+  smtpFrom: 'SMTP_FROM',
+  smtpTo: 'SMTP_TO',
 };
 
 const isSet = (name) => {

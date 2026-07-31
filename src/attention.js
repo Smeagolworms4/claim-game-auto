@@ -50,8 +50,26 @@ export async function resolve(token) {
   return state.saveAttention(token, { ...rest, resolvedAt: new Date().toISOString() });
 }
 
-export const urlFor = (token) =>
-  config.publicUrl ? `${config.publicUrl}/unlock/${token}` : `/unlock/${token}`;
+// Base du lien : PUBLIC_URL si défini, sinon l'origine par laquelle l'interface
+// a été jointe la dernière fois. Un chemin relatif ne sert à rien dans une
+// notification reçue sur un téléphone.
+export const urlFor = (token) => {
+  const base = config.publicUrl || lastOrigin();
+  return base ? `${base}/unlock/${token}` : `/unlock/${token}`;
+};
+
+// Injecté par le serveur web pour éviter une dépendance circulaire.
+let originGetter = () => null;
+export const setOriginSource = (fn) => {
+  originGetter = fn;
+};
+const lastOrigin = () => {
+  try {
+    return originGetter();
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Crée (ou réutilise) une demande pour un store et notifie l'utilisateur.
@@ -80,7 +98,9 @@ export async function request(provider, reason, details = '', url = null) {
       '',
       'Ouvre ce lien pour prendre la main sur le navigateur, débloquer, puis valider :',
       urlFor(token),
-      config.publicUrl ? '' : '(définis PUBLIC_URL pour recevoir un lien complet)',
+      config.publicUrl || lastOrigin()
+        ? ''
+        : '(ouvre l\'interface une fois, ou définis PUBLIC_URL, pour recevoir un lien complet)',
     ]
       .filter(Boolean)
       .join('\n'),

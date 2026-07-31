@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import net from 'node:net';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -23,6 +24,12 @@ export const onReschedule = (fn) => {
   rescheduleHook = fn;
 };
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+// Origine réellement utilisée pour joindre l'interface (ex. http://localhost:8099).
+// Le conteneur ne connaît que son port interne : sans PUBLIC_URL, c'est le seul
+// moyen de fabriquer un lien de déblocage cliquable depuis une notification.
+let seenOrigin = null;
+export const publicBase = () => config.publicUrl || seenOrigin || null;
 
 // Cache des offres détectées, alimenté par les runs et les détections manuelles.
 let lastDetection = { at: null, byProvider: {} };
@@ -73,13 +80,53 @@ const readBody = (req) =>
     });
   });
 
-const authorized = (req) => {
-  if (!config.webUser && !config.webPassword) return true;
+// Sessions ouvertes après une authentification réussie. Le WebSocket du VNC ne
+// transporte pas l'en-tête Authorization de façon fiable selon les navigateurs,
+// alors qu'il envoie toujours les cookies : c'est ce cookie qui autorise le
+// flux VNC sur le même port que le reste.
+const sessions = new Set();
+
+const basicAuthOk = (req) => {
   const header = req.headers.authorization || '';
   if (!header.startsWith('Basic ')) return false;
   const [user, pass] = Buffer.from(header.slice(6), 'base64').toString().split(':');
   return user === config.webUser && pass === config.webPassword;
 };
+
+const cookieOf = (req, name) =>
+  (req.headers.cookie || '')
+    .split(';')
+    .map((c) => c.trim())
+    .find((c) => c.startsWith(`${name}=`))
+    ?.slice(name.length + 1) || null;
+
+/**
+ * Accès autorisé si l'authentification basique passe, ou si la requête porte le
+ * jeton d'une demande de déblocage encore valide. Ce second cas est ce qui
+ * permet au lien reçu en notification d'ouvrir le VNC sans mot de passe : le
+ * jeton EST le secret, il est aléatoire et à durée limitée.
+ */
+async function isAllowed(req) {
+  if (!config.webUser && !config.webPassword) return true;
+  if (basicAuthOk(req)) return true;
+
+  const session = cookieOf(req, 'ca_session');
+  if (session && sessions.has(session)) return true;
+
+  const token = cookieOf(req, 'ca_unlock');
+  if (token && (await attention.get(token))) return true;
+  return false;
+}
+
+/** Ouvre une session après une authentification basique réussie. */
+function openSession(res) {
+  const token = randomBytes(24).toString('hex');
+  sessions.add(token);
+  // Plafond simple : on ne garde pas indéfiniment des jetons en mémoire.
+  if (sessions.size > 200) sessions.delete(sessions.values().next().value);
+  res.setHeader('set-cookie', `ca_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
+  return token;
+}
 
 async function handleApi(req, res, url) {
   const route = `${req.method} ${url.pathname}`;
@@ -102,7 +149,10 @@ async function handleApi(req, res, url) {
         stats: st,
         schedule: { cron: config.cron, cronDetect: config.cronDetect, timezone: config.timezone },
         browser: config.browser,
-        attention: await attention.pending(),
+        // Chaque demande porte son lien complet : c'est exactement celui qui
+        // part en notification, donc vérifiable d'un coup d'œil.
+        attention: (await attention.pending()).map((a) => ({ ...a, link: attention.urlFor(a.token) })),
+        publicBase: publicBase(),
         login: loginSession.status(),
         vnc: vnc.status(),
         dryRun: config.dryRun,
@@ -154,7 +204,11 @@ async function handleApi(req, res, url) {
     }
 
     case 'GET /api/attention':
-      return json(res, 200, { pending: await attention.pending(), all: await attention.list() });
+      return json(res, 200, {
+        pending: (await attention.pending()).map((a) => ({ ...a, link: attention.urlFor(a.token) })),
+        all: await attention.list(),
+        publicBase: publicBase(),
+      });
 
     case 'POST /api/claimed': {
       // Un jeu récupéré à la main (typiquement quand un captcha bloque le
@@ -223,6 +277,15 @@ async function handleApi(req, res, url) {
 
     case 'GET /api/keys':
       return json(res, 200, { keys: await state.keys() });
+
+    case 'POST /api/keys/archive': {
+      const { code, codes, archived = true } = await readBody(req);
+      const cibles = codes || (code ? [code] : []);
+      if (!cibles.length) return json(res, 400, { error: 'code(s) requis' });
+      for (const c of cibles) await state.archiveKey(c, archived);
+      log.info(`${cibles.length} clé(s) ${archived ? 'archivée(s)' : 'désarchivée(s)'}`);
+      return json(res, 200, { count: cibles.length, archived });
+    }
 
     case 'POST /api/keys/redeem': {
       redeemPendingKeys().catch((err) => log.error('activation clés:', err.message));
@@ -340,7 +403,7 @@ async function handleUnlock(res, token, action) {
     try {
       const active = loginSession.status();
       if (!active.active || active.provider !== entry.provider) {
-        await loginSession.start(entry.provider, { url: entry.url });
+        await loginSession.start(entry.provider, { url: entry.url, entry });
       }
       return json(res, 200, { provider: entry.provider, label, reason: entry.reason });
     } catch (err) {
@@ -348,8 +411,9 @@ async function handleUnlock(res, token, action) {
     }
   }
 
-  // finish : on ferme la session, on marque la demande résolue, et on relance
-  // le claim du store pour que l'automatisation reprenne toute seule.
+  // finish : on ferme la session et on reprend, quoi qu'il arrive. Le blocage
+  // levé n'est pas forcément une question de connexion (captcha en plein
+  // tunnel d'achat) : c'est le nouveau passage qui dira où on en est.
   const result = await loginSession.finish();
   const prev = lastDetection.byProvider[entry.provider] || { offers: [] };
   lastDetection.byProvider[entry.provider] = {
@@ -358,12 +422,11 @@ async function handleUnlock(res, token, action) {
     at: new Date().toISOString(),
   };
 
-  if (result.loggedIn) {
-    await attention.resolve(token);
-    log.info(`déblocage ${entry.provider} validé — reprise du claim`);
-    runAll({ claim: true, only: entry.provider }).catch((err) => log.error('reprise:', err.message));
-  }
-  return json(res, 200, { ...result, label });
+  await attention.resolve(token);
+  log.info(`déblocage ${entry.provider} validé — reprise du claim`);
+  runAll({ claim: true, only: entry.provider }).catch((err) => log.error('reprise:', err.message));
+
+  return json(res, 200, { ...result, label, resumed: true });
 }
 
 // Vue / Vuetify / icônes servis depuis node_modules : aucune dépendance à un
@@ -462,15 +525,39 @@ function proxyUpgrade(req, socket, head) {
 }
 
 export function startWebServer() {
+  // Les liens de déblocage utilisent l'origine vue par le navigateur.
+  attention.setOriginSource(() => seenOrigin);
+
   const server = http.createServer(async (req, res) => {
     // Les liens de déblocage portent leur propre secret (le jeton) : ils doivent
     // rester ouvrables depuis une notification, sans l'auth basique.
-    const isUnlock = req.url.startsWith('/unlock/') || req.url.startsWith('/api/unlock/');
-    if (!isUnlock && !authorized(req)) {
+    const unlockToken = req.url.match(/^\/(?:api\/)?unlock\/([a-f0-9]{16,})/)?.[1] || null;
+    const isUnlock = Boolean(unlockToken);
+    if (!isUnlock && !(await isAllowed(req))) {
       res.writeHead(401, { 'www-authenticate': 'Basic realm="claim-auto"' }).end('Auth requise');
       return;
     }
+
+    // Authentifié par mot de passe et pas encore de session : on en ouvre une,
+    // pour que le WebSocket du VNC passe lui aussi.
+    if (config.webPassword && basicAuthOk(req) && !cookieOf(req, 'ca_session')) {
+      openSession(res);
+    }
+
+    // La page de déblocage dépose son jeton en cookie : le VNC qu'elle affiche
+    // est alors autorisé, sans exposer l'interface entière.
+    if (unlockToken && (await attention.get(unlockToken))) {
+      res.setHeader(
+        'set-cookie',
+        `ca_unlock=${unlockToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=7200`,
+      );
+    }
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    // On retient l'origine d'une vraie visite de l'interface, pas des sondes.
+    if (req.headers.host && !req.headers.host.startsWith('127.0.0.1')) {
+      const proto = req.headers['x-forwarded-proto'] || 'http';
+      seenOrigin = `${proto}://${req.headers.host}`;
+    }
     try {
       if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
       else if (url.pathname.startsWith('/unlock/')) await serveStatic(res, '/unlock.html');
@@ -493,9 +580,16 @@ export function startWebServer() {
 
   // noVNC ouvre son WebSocket sur /websockify (racine) ou /vnc/websockify
   // selon la configuration : on accepte les deux.
-  server.on('upgrade', (req, socket, head) => {
-    if (/^\/(vnc\/)?websockify/.test(req.url)) proxyUpgrade(req, socket, head);
-    else socket.destroy();
+  // Le WebSocket du VNC donne le contrôle du navigateur : il doit être protégé
+  // exactement comme le reste, sinon l'authentification ne sert à rien.
+  server.on('upgrade', async (req, socket, head) => {
+    if (!/^\/(vnc\/)?websockify/.test(req.url)) return socket.destroy();
+    if (!(await isAllowed(req))) {
+      log.warn('WebSocket VNC refusé : authentification manquante');
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      return socket.destroy();
+    }
+    proxyUpgrade(req, socket, head);
   });
 
   server.listen(config.webPort, () => log.info(`interface web sur http://0.0.0.0:${config.webPort}`));

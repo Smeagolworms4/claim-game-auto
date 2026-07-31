@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import nodemailer from 'nodemailer';
 import { makeLogger } from './logger.js';
 
 const log = makeLogger('notify');
@@ -64,6 +65,26 @@ const channels = [
         text: `${title}\n${text}`.slice(0, 4000),
         disable_web_page_preview: true,
       }),
+  },
+  {
+    name: 'email',
+    // Actif dès qu'on a un serveur et un destinataire ; l'authentification est
+    // optionnelle (relais local ouvert).
+    enabled: () => Boolean(config.smtpHost && config.smtpTo),
+    send: async (title, text) => {
+      const transport = nodemailer.createTransport({
+        host: config.smtpHost,
+        port: config.smtpPort,
+        secure: config.smtpSecure,
+        ...(config.smtpUser ? { auth: { user: config.smtpUser, pass: config.smtpPass } } : {}),
+      });
+      await transport.sendMail({
+        from: config.smtpFrom || config.smtpUser || `claim-auto@${config.smtpHost}`,
+        to: config.smtpTo,
+        subject: title,
+        text: config.publicUrl ? `${text}\n\nInterface : ${config.publicUrl}` : text,
+      });
+    },
   },
   {
     name: 'ntfy',

@@ -231,6 +231,27 @@ export async function screenshot(page, provider, tag) {
   }
 }
 
+/**
+ * Purge les jetons Cloudflare d'un contexte.
+ *
+ * Chaque validation de Turnstile ajoute un cf_clearance ; ils s'empilent par
+ * domaine et par chemin. Au-delà d'un seul, Cloudflare reçoit des jetons
+ * contradictoires, les refuse tous et redemande une validation — la boucle
+ * sans fin. Les repartir à zéro force un challenge propre, qui passe.
+ * Les cookies de session du store ne sont pas touchés.
+ */
+export async function clearCloudflareCookies(context) {
+  const before = await context.cookies();
+  const cf = before.filter((c) => /^(cf_clearance|__cf_bm|__cflb|cf_chl_)/.test(c.name));
+  if (!cf.length) return 0;
+
+  for (const name of new Set(cf.map((c) => c.name))) {
+    await context.clearCookies({ name }).catch(() => {});
+  }
+  log.info(`jetons Cloudflare purgés : ${cf.map((c) => c.name).join(', ')}`);
+  return cf.length;
+}
+
 /** Clique le premier sélecteur visible parmi une liste de candidats. */
 export async function clickFirst(page, selectors, { timeout = 8000 } = {}) {
   const deadline = Date.now() + timeout;

@@ -17,6 +17,7 @@
     "@mdi/font": "^7.4.47",
     "croner": "^10.0.1",
     "dotenv": "^16.4.5",
+    "nodemailer": "^6.9.16",
     "playwright": "1.62.0",
     "vue": "^3.5.13",
     "vuetify": "^3.7.6"
