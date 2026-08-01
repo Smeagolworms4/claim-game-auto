@@ -152,6 +152,10 @@ async function handleApi(req, res, url) {
         // Chaque demande porte son lien complet : c'est exactement celui qui
         // part en notification, donc vérifiable d'un coup d'œil.
         attention: (await attention.pending()).map((a) => ({ ...a, link: attention.urlFor(a.token) })),
+        attentionRecent: (await attention.list())
+          .filter((a) => a.resolvedAt)
+          .map((a) => ({ ...a, link: attention.urlFor(a.token) }))
+          .slice(0, 10),
         publicBase: publicBase(),
         login: loginSession.status(),
         vnc: vnc.status(),

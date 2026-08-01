@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import nodemailer from 'nodemailer';
 import { makeLogger } from './logger.js';
+import * as state from './state.js';
 
 const log = makeLogger('notify');
 
@@ -92,26 +93,30 @@ const channels = [
     // API JSON plutôt que les en-têtes : un titre avec emoji ou accent ne peut
     // pas passer par l'en-tête Title, limité au Latin-1 (« Cannot convert
     // argument to a ByteString »).
-    send: (title, text) =>
+    send: (title, text, opts = {}) =>
       post(`${config.ntfyServer.replace(/\/$/, '')}/`, {
         topic: config.ntfyTopic,
         title,
         message: text,
-        ...(config.publicUrl ? { click: config.publicUrl } : {}),
+        // Une demande d'intervention passe en priorité haute : elle sonne même
+        // quand le reste est en sourdine.
+        priority: opts.urgent ? 5 : 3,
+        ...(opts.tags ? { tags: opts.tags } : {}),
+        ...(opts.click || config.publicUrl ? { click: opts.click || config.publicUrl } : {}),
       }),
   },
 ];
 
 /** Notifie seulement si la catégorie est activée (NOTIFY_EVENTS). */
-export async function notifyEvent(kind, title, text) {
+export async function notifyEvent(kind, title, text, opts = {}) {
   if (!config.notifyEvents.includes(kind)) {
     log.debug(`notification ${kind} désactivée`);
     return;
   }
-  return notify(title, text);
+  return notify(title, text, opts);
 }
 
-export async function notify(title, text) {
+export async function notify(title, text, opts = {}) {
   const active = channels.filter((c) => c.enabled());
   if (!active.length) return { sent: [], failed: [] };
 
@@ -120,7 +125,7 @@ export async function notify(title, text) {
   await Promise.all(
     active.map((c) =>
       c
-        .send(title, text)
+        .send(title, text, opts)
         .then(() => sent.push(c.name))
         .catch((err) => {
           log.warn(`échec notification ${c.name}:`, err.message);
@@ -128,6 +133,22 @@ export async function notify(title, text) {
         }),
     ),
   );
+  // Trace dans l'historique : permet de vérifier après coup ce qui est parti,
+  // et sur quels canaux, quand on n'a rien vu passer sur son téléphone.
+  await state
+    .addHistory({
+      provider: 'notification',
+      title,
+      status: failed.length ? (sent.length ? 'partiel' : 'error') : 'envoyée',
+      message: [
+        sent.length ? `envoyée sur ${sent.join(', ')}` : null,
+        failed.length ? `échec ${failed.map((f) => `${f.channel} (${f.error})`).join(', ')}` : null,
+      ]
+        .filter(Boolean)
+        .join(' — '),
+    })
+    .catch(() => {});
+
   return { sent, failed };
 }
 

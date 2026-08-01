@@ -6,6 +6,7 @@ import { allNames } from './providers/index.js';
 import * as state from './state.js';
 import * as loginSession from './login.js';
 import * as vnc from './vnc.js';
+import * as attention from './attention.js';
 import { startWebServer, onReschedule } from './web/server.js';
 
 const [, , cmd = 'daemon', arg] = process.argv;
@@ -105,7 +106,15 @@ async function main() {
         detectAll().catch((err) => log.warn('détection initiale:', err.message));
       }
 
+      // Rappels : on repasse toutes les 30 min, la relance elle-même n'a lieu
+      // qu'après le délai configuré (ATTENTION_REMIND).
+      const reminder = setInterval(
+        () => attention.remindPending().catch((err) => log.warn('rappel:', err.message)),
+        30 * 60 * 1000,
+      );
+
       const bye = async () => {
+        clearInterval(reminder);
         log.info('arrêt…');
         jobs.claim?.stop();
         jobs.detect?.stop();

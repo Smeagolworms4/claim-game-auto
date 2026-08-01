@@ -78,7 +78,10 @@ export const config = {
   // URL publique de l'interface, utilisée dans les notifications pour envoyer
   // un lien cliquable qui ouvre le VNC et débloque un captcha.
   publicUrl: (process.env.PUBLIC_URL || '').replace(/\/$/, ''),
-  attentionTtl: Number(process.env.ATTENTION_TTL || 86400) * 1000,
+  // Une semaine : une demande ratée doit rester consultable, pas s'évaporer.
+  attentionTtl: Number(process.env.ATTENTION_TTL || 604800) * 1000,
+  // Relance d'une demande d'intervention non levée (0 = pas de rappel).
+  attentionRemind: Number(process.env.ATTENTION_REMIND ?? 21600) * 1000,
 
   // Catégories de notification actives :
   //   claim     → résultat du claim automatique

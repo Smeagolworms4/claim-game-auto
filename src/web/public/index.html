@@ -81,6 +81,32 @@
         </div>
       </v-alert>
 
+      <!-- Trace des interventions déjà traitées : utile quand on a raté la
+           notification sur le moment. -->
+      <v-expansion-panels v-if="(status.attentionRecent || []).length" class="mb-4">
+        <v-expansion-panel>
+          <v-expansion-panel-title class="text-body-2">
+            <v-icon icon="mdi-history" size="small" class="mr-2"></v-icon>
+            Interventions récentes ({{ status.attentionRecent.length }})
+          </v-expansion-panel-title>
+          <v-expansion-panel-text>
+            <v-list density="compact" lines="two">
+              <v-list-item v-for="a in status.attentionRecent" :key="a.token">
+                <v-list-item-title class="text-body-2">
+                  {{ providerLabel(a.provider) }} — {{ reasonLabel(a.reason) }}
+                </v-list-item-title>
+                <v-list-item-subtitle>
+                  {{ datetime(a.at) }}<span v-if="a.details"> · {{ a.details }}</span>
+                </v-list-item-subtitle>
+                <template #append>
+                  <v-chip size="x-small" variant="tonal" color="success">résolue</v-chip>
+                </template>
+              </v-list-item>
+            </v-list>
+          </v-expansion-panel-text>
+        </v-expansion-panel>
+      </v-expansion-panels>
+
       <v-row>
         <v-col v-for="p in status.providers" :key="p.name" cols="12" md="6" lg="3">
           <v-card border>

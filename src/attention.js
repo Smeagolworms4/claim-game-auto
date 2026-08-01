@@ -25,7 +25,12 @@ const REASONS = {
 const expired = (r) => Date.now() - new Date(r.at).getTime() > config.attentionTtl;
 
 async function prune(entries) {
-  const dead = entries.filter((r) => expired(r) || (r.resolvedAt && Date.now() - new Date(r.resolvedAt).getTime() > 3600_000));
+  // Les demandes résolues restent visibles 24 h : sans ça, une intervention
+  // traitée disparaissait en une heure et il ne restait aucune trace de ce qui
+  // avait été demandé.
+  const dead = entries.filter(
+    (r) => expired(r) || (r.resolvedAt && Date.now() - new Date(r.resolvedAt).getTime() > 86400_000),
+  );
   if (dead.length) await state.dropAttention(dead.map((r) => r.token));
   return entries.filter((r) => !dead.includes(r));
 }
@@ -83,7 +88,15 @@ export async function request(provider, reason, details = '', url = null) {
   }
 
   const token = randomBytes(16).toString('hex');
-  const entry = { provider, reason, details, url, at: new Date().toISOString(), resolvedAt: null };
+  const entry = {
+    provider,
+    reason,
+    details,
+    url,
+    at: new Date().toISOString(),
+    notifiedAt: new Date().toISOString(),
+    resolvedAt: null,
+  };
   await state.saveAttention(token, entry);
 
   const why = REASONS[reason] || reason;
@@ -104,7 +117,36 @@ export async function request(provider, reason, details = '', url = null) {
     ]
       .filter(Boolean)
       .join('\n'),
+    { urgent: true, tags: 'lock', click: urlFor(token) },
   );
 
   return { token, ...entry };
+}
+
+/**
+ * Relance les demandes non levées. Sans ça, une notification ratée sur le
+ * moment ne revenait jamais : les passages suivants réutilisent la demande
+ * existante et se taisent, pour ne pas spammer à chaque run.
+ */
+export async function remindPending() {
+  if (!config.attentionRemind) return [];
+  const now = Date.now();
+  const relances = [];
+
+  for (const r of await pending()) {
+    const last = new Date(r.notifiedAt || r.at).getTime();
+    if (now - last < config.attentionRemind) continue;
+
+    const { token, ...rest } = r;
+    await state.saveAttention(token, { ...rest, notifiedAt: new Date().toISOString() });
+    await notifyEvent(
+      'captcha',
+      `🔔 Rappel — ${r.provider} attend toujours`,
+      [`${REASONS[r.reason] || r.reason}${r.details ? ` (${r.details})` : ''}`, '', urlFor(token)].join('\n'),
+      { urgent: true, tags: 'bell', click: urlFor(token) },
+    );
+    relances.push(r.provider);
+    log.info(`rappel envoyé pour ${r.provider}`);
+  }
+  return relances;
 }
